@@ -2,6 +2,19 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Project Purpose
+
+**問題**: 従来の負荷テストツールは集計済みメトリクスしか保存せず、テスト後に別の切り口で分析することが困難。
+
+**解決策**: k6の各リクエストを生データとしてDuckDBに保存し、テスト後に自由なSQLクエリで分析可能にする。
+
+**主な特徴**:
+- **生データ保存**: 集計前の個別リクエストデータをすべて記録
+- **ポータブル**: `.duckdb`ファイル1つで結果を共有・分析可能
+- **軽量**: InfluxDB/Grafanaなどの重厚なスタック不要
+- **ブラウザ分析**: duckdb-wasmでサーバーなしでも分析可能
+- **回帰検知**: ベースラインとの自動比較機能
+
 ## Build Commands
 
 ### Go Sidecar

@@ -2,7 +2,74 @@
 
 k6 + Kubernetes + DuckDB を組み合わせた負荷テストパイプラインのテンプレートです。
 
-## 概要
+---
+
+## なぜこのツールキットが必要か？
+
+### 従来の負荷テストの課題
+
+負荷テストツール（k6、JMeter、Gatlingなど）は優れたメトリクス収集機能を持っていますが、以下の課題があります：
+
+1. **集計済みデータしか残らない**: 平均、P95、P99などの集計値は得られるが、個々のリクエストデータは失われる
+2. **後から別の切り口で分析できない**: テスト実行後に「特定のエンドポイントだけ」「特定の時間帯だけ」といった分析が困難
+3. **分散環境でのデータ統合が面倒**: 複数のk6インスタンスからのデータを統合するには追加のインフラ（InfluxDB、Grafanaなど）が必要
+4. **軽量な可視化手段がない**: 結果を確認するためだけに重厚な監視スタックを構築する必要がある
+
+### このツールキットのアプローチ
+
+```
+従来: k6 → 集計メトリクス → InfluxDB → Grafana（重厚）
+本ツールキット: k6 → 生データ → DuckDB → ブラウザで分析（軽量）
+```
+
+**すべてのリクエストを生データとしてDuckDBに保存**することで：
+
+- テスト後に自由なSQLクエリで分析可能
+- 単一の`.duckdb`ファイルとして持ち運び可能
+- duckdb-wasmでブラウザ上でも分析可能（サーバー不要）
+- 過去のテスト結果との比較・回帰検知が容易
+
+### ユースケース
+
+| シナリオ | このツールキットの利点 |
+|---------|----------------------|
+| **本番リリース前の性能検証** | ベースラインと比較して性能劣化を自動検出 |
+| **ボトルネック調査** | DNS/TCP/TLS/TTFBの詳細タイミングで原因特定 |
+| **負荷テスト結果の共有** | `.duckdb`ファイル1つを渡すだけで分析環境を再現 |
+| **CI/CDへの組み込み** | 軽量なサイドカーパターンで既存パイプラインに統合 |
+| **オフライン環境での分析** | インターネット接続不要でブラウザ分析可能 |
+
+---
+
+## 設計思想
+
+### 1. サイドカーパターン
+
+k6とメトリクス収集を同一Pod内で動作させることで：
+- ネットワークレイテンシの影響を最小化
+- k6の実行に影響を与えずにメトリクスを収集
+- Podごとに独立したDuckDBファイルを生成
+
+### 2. DuckDBの選択理由
+
+| 特性 | メリット |
+|------|---------|
+| **組み込み型** | 外部DBサーバー不要、単一バイナリで動作 |
+| **列指向** | 分析クエリ（集計、フィルタ）が高速 |
+| **SQLインターフェース** | 学習コストが低い、既存の知識を活用 |
+| **WASM対応** | ブラウザ上でもネイティブ並みの速度で動作 |
+| **ファイルベース** | 結果の保存・共有・バージョン管理が容易 |
+
+### 3. S3互換ストレージ
+
+RustFS/MinIO/AWS S3のいずれにも対応することで：
+- ローカル開発: RustFS/MinIOで手軽に検証
+- 本番環境: AWS S3で堅牢なストレージ
+- オンプレミス: MinIOで自前運用も可能
+
+---
+
+## アーキテクチャ概要
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -27,9 +94,19 @@ k6 + Kubernetes + DuckDB を組み合わせた負荷テストパイプライン�
                                      │
                                      ▼
                             ┌───────────────┐
-                            │   Frontend    │  (ブラウザで可視化)
+                            │   Frontend    │  (duckdb-wasmで
+                            │               │   ブラウザ分析)
                             └───────────────┘
 ```
+
+### データフロー詳細
+
+1. **k6** が対象サーバーにリクエストを送信
+2. 各リクエストの詳細メトリクス（RTT, DNS, TCP, TLS, TTFB等）を **Sidecar** に POST
+3. Sidecar がメモリバッファに蓄積、5秒ごとに **DuckDB** にフラッシュ
+4. テスト完了後、`.duckdb` ファイルを **S3互換ストレージ** にアップロード
+5. **Aggregate Job** が複数Podの `.duckdb` を1つに統合
+6. **Frontend** でブラウザ上からSQLクエリによる分析
 
 ### 主な機能
 
@@ -73,9 +150,10 @@ k6 + Kubernetes + DuckDB を組み合わせた負荷テストパイプライン�
 
 ## 前提条件
 
-- Go 1.23以上
+- Go 1.24以上
 - Node.js 18以上
 - Docker / Docker Compose
+- k6（`brew install k6` でインストール）
 - kubectl（Kubernetes使用時）
 
 ## クイックスタート（Docker Compose + RustFS）
@@ -402,11 +480,122 @@ GROUP BY pod_id;
 | **MinIO** | ローカル開発、オンプレ | `S3_ENDPOINT=http://minio:9000` |
 | **AWS S3** | 本番環境 | `S3_ENDPOINT` を設定しない（IAMロール使用） |
 
+---
+
+## 典型的なワークフロー
+
+### 1. ベースライン計測
+
+```bash
+# 安定した状態でベースラインを計測
+RUN_ID=baseline-v1.0 k6 run k6-script.js
+curl -X POST http://localhost:8081/api/v1/flush-upload
+```
+
+### 2. 変更後の計測
+
+```bash
+# コード変更後に再計測
+RUN_ID=after-optimization k6 run k6-script.js
+curl -X POST http://localhost:8081/api/v1/flush-upload
+```
+
+### 3. 比較分析
+
+```bash
+# API経由で回帰検出
+curl -X POST http://localhost:8081/api/v1/analysis/compare \
+  -H "Content-Type: application/json" \
+  -d '{"baseline_run_id": "baseline-v1.0", "current_run_id": "after-optimization"}'
+```
+
+または、DuckDB CLIで直接比較：
+
+```sql
+-- 2つのランを比較
+SELECT
+    run_id,
+    COUNT(*) as requests,
+    AVG(rtt) as avg_rtt,
+    PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY rtt) as p95
+FROM metrics
+WHERE run_id IN ('baseline-v1.0', 'after-optimization')
+GROUP BY run_id;
+```
+
+---
+
+## トラブルシューティング
+
+| 症状 | 原因 | 対処 |
+|------|------|------|
+| Sidecarに接続できない | ポートが開いていない | `docker compose ps` でコンテナ状態を確認 |
+| S3アップロード失敗 | バケットが存在しない | `mc mb local/loadtest` でバケット作成 |
+| DuckDBファイルが空 | flushされていない | `/api/v1/flush` を明示的に呼び出す |
+| フロントエンドでファイルが読めない | CORSまたはファイル形式 | ブラウザのコンソールでエラーを確認 |
+
+---
+
+## 発展的な使い方
+
+### CI/CDパイプラインへの統合
+
+GitHub Actionsの例：
+
+```yaml
+- name: Run load test
+  run: |
+    docker compose up -d
+    k6 run k6/k6-script.js
+    curl -X POST http://localhost:8081/api/v1/flush-upload
+
+- name: Check for regression
+  run: |
+    result=$(curl -s -X POST http://localhost:8081/api/v1/analysis/compare ...)
+    if echo "$result" | jq -e '.has_regression'; then
+      echo "Performance regression detected!"
+      exit 1
+    fi
+```
+
+### カスタムメトリクスの追加
+
+k6スクリプトで `tags` フィールドを活用：
+
+```javascript
+http.post(SIDECAR_BASE + '/api/v1/ingest', JSON.stringify({
+  // ... 基本フィールド
+  tags: {
+    scenario: 'checkout',
+    user_type: 'premium',
+    region: 'ap-northeast-1'
+  }
+}));
+```
+
+後からタグでフィルタして分析：
+
+```sql
+SELECT AVG(rtt) FROM metrics
+WHERE json_extract_string(tags, '$.user_type') = 'premium';
+```
+
+---
+
 ## 注意事項
 
 - 本テンプレートはローカル開発・テスト用です
 - 本番環境では認証情報をSecretで管理してください
 - RustFSのデフォルト認証情報は必ず変更してください
+- 大量のリクエスト（数百万以上）を記録する場合はディスク容量に注意
+
+---
+
+## 関連リソース
+
+- [k6 Documentation](https://k6.io/docs/)
+- [DuckDB Documentation](https://duckdb.org/docs/)
+- [duckdb-wasm](https://github.com/duckdb/duckdb-wasm)
 
 ## ライセンス
 
