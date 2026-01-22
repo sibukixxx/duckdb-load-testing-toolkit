@@ -1,0 +1,23 @@
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Go
+sidecar-go/duckdb-sidecar
+
+# Data files
+*.duckdb
+*.duckdb.wal
+sidecar-go/data/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/.parcel-cache/
+
+# Claude Code
+.claude/settings.local.json

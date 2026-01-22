@@ -1,0 +1,25 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: duckdb-aggregate
+spec:
+  template:
+    spec:
+      containers:
+      - name: aggregator
+        image: python:3.10-slim
+        command: ["python", "/scripts/aggregate.py"]
+        env:
+        - name: S3_BUCKET
+          value: "{{S3_BUCKET}}"
+        - name: RUN_ID
+          value: "{{RUN_ID}}"
+        volumeMounts:
+        - name: scripts
+          mountPath: /scripts
+      restartPolicy: Never
+      volumes:
+      - name: scripts
+        configMap:
+          name: aggregate-scripts
+  backoffLimit: 1

@@ -1,0 +1,82 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aggregate-scripts
+data:
+  aggregate.py: |
+
+    import os
+    import sys
+    import tempfile
+    import duckdb
+    import boto3
+    from botocore.config import Config
+
+    # S3互換ストレージ（RustFS等）の設定
+    bucket = os.environ.get('S3_BUCKET')
+    run_id = os.environ.get('RUN_ID', 'run-local')
+    endpoint = os.environ.get('S3_ENDPOINT')  # RustFS: http://rustfs:9000
+    access_key = os.environ.get('S3_ACCESS_KEY')
+    secret_key = os.environ.get('S3_SECRET_KEY')
+    region = os.environ.get('S3_REGION', 'us-east-1')
+
+    if not bucket:
+        print('S3_BUCKET not set')
+        sys.exit(1)
+
+    # S3クライアントの作成
+    if endpoint:
+        # RustFS/MinIO等のS3互換ストレージ
+        s3 = boto3.client(
+            's3',
+            endpoint_url=endpoint,
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key,
+            region_name=region,
+            config=Config(s3={'addressing_style': 'path'})
+        )
+    else:
+        # AWS S3
+        s3 = boto3.client('s3', region_name=region)
+
+    prefix = f'runs/{run_id}/'
+    print('listing objects with prefix', prefix)
+
+    # オブジェクト一覧を取得
+    response = s3.list_objects_v2(Bucket=bucket, Prefix=prefix)
+    files = []
+    if 'Contents' in response:
+        for obj in response['Contents']:
+            key = obj['Key']
+            if key.endswith('.duckdb') and not key.endswith('combined.duckdb'):
+                files.append(key)
+
+    print(f'found {len(files)} files')
+
+    if not files:
+        print('no files found')
+        sys.exit(0)
+
+    tmpdir = tempfile.mkdtemp()
+    local_files = []
+    for key in files:
+        local = os.path.join(tmpdir, os.path.basename(key))
+        print('downloading', key)
+        s3.download_file(bucket, key, local)
+        local_files.append(local)
+
+    out_db = os.path.join(tmpdir, 'combined.duckdb')
+    con = duckdb.connect(out_db)
+    con.execute('CREATE TABLE IF NOT EXISTS metrics_all (ts BIGINT, pod_id VARCHAR, url VARCHAR, status INTEGER, rtt DOUBLE, body_len INTEGER);')
+    for lf in local_files:
+        print('attaching', lf)
+        con.execute(f"ATTACH '{lf}' AS src;")
+        con.execute("INSERT INTO metrics_all SELECT * FROM src.metrics;")
+        con.execute("DETACH src;")
+    con.close()
+
+    print('writing combined db to', out_db)
+    # 結果をアップロード
+    upload_key = f'{prefix}combined.duckdb'
+    s3.upload_file(out_db, bucket, upload_key)
+    print(f'uploaded {upload_key}')

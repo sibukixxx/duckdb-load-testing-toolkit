@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: k6-scripts
+data:
+  k6-script.js: |
+
+    import http from 'k6/http';
+    import { sleep } from 'k6';
+    
+    export let options = {
+      vus: 100,
+      duration: '1m',
+    };
+    
+    const SIDECAR = __ENV.SIDECAR_BASE || 'http://localhost:8081';
+    
+    export default function () {
+      const res = http.get(__ENV.TARGET || 'https://httpbin.org/get');
+    
+      const event = {
+        run_id: __ENV.RUN_ID || 'local-run',
+        ts: Date.now(),
+        pod_id: __ENV.POD_NAME || 'k6-vu',
+        url: __ENV.TARGET || 'https://httpbin.org/get',
+        status: res.status,
+        rtt: res.timings.duration,
+        body_len: res.body.length,
+      };
+    
+      http.post(`${SIDECAR}/api/v1/ingest`, JSON.stringify(event), {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: '3000ms',
+      });
+    
+      sleep(1);
+    }

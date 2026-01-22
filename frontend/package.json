@@ -1,0 +1,13 @@
+{
+  "name": "duckdb-wasm-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@duckdb/duckdb-wasm": "^1.25.0",
+    "chart.js": "^4.4.0"
+  },
+  "scripts": {
+    "start": "parcel index.html --port 8080",
+    "build": "parcel build index.html"
+  }
+}

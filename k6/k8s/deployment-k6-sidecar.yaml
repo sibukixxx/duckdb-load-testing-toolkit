@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: k6-load
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: k6-load
+  template:
+    metadata:
+      labels:
+        app: k6-load
+    spec:
+      containers:
+      - name: k6
+        image: loadimpact/k6:latest
+        args: ["run", "/scripts/k6-script.js"]
+        env:
+        - name: SIDECAR_BASE
+          value: "http://localhost:8081"
+        - name: RUN_ID
+          value: "run-{{RUN_ID}}"
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        volumeMounts:
+          - name: scripts
+            mountPath: /scripts
+      - name: sidecar
+        image: yourrepo/duckdb-sidecar:latest
+        env:
+        - name: RUN_ID
+          value: "run-{{RUN_ID}}"
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: S3_BUCKET
+          value: "{{S3_BUCKET}}"
+        volumeMounts:
+          - name: data
+            mountPath: /data
+      volumes:
+      - name: scripts
+        configMap:
+          name: k6-scripts
+      - name: data
+        emptyDir: {}
