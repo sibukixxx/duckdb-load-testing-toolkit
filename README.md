@@ -148,45 +148,157 @@ RustFS/MinIO/AWS S3のいずれにも対応することで：
 └── scripts/                 # ヘルパースクリプト
 ```
 
-## 前提条件
+---
 
-- Go 1.24以上
-- Node.js 18以上
-- Docker / Docker Compose
-- k6（`brew install k6` でインストール）
-- kubectl（Kubernetes使用時）
+## 初期セットアップ
 
-## クイックスタート（Docker Compose + RustFS）
+### 前提条件
 
-最も簡単にローカルで試す方法です。
+| ツール | バージョン | 用途 | インストール確認 |
+|--------|----------|------|-----------------|
+| **Docker** | 20.10+ | コンテナ実行 | `docker --version` |
+| **Docker Compose** | v2.0+ | ローカル環境構築 | `docker compose version` |
+| **Go** | 1.24+ | Sidecarビルド | `go version` |
+| **k6** | 0.45+ | 負荷テスト実行 | `k6 version` |
+| **Node.js** | 18+ | フロントエンド | `node --version` |
+| **kubectl** | 1.25+ | K8sデプロイ（オプション） | `kubectl version --client` |
+| **DuckDB CLI** | 0.9+ | 結果分析（オプション） | `duckdb --version` |
+
+### ツールのインストール
+
+```bash
+# macOS (Homebrew)
+brew install go k6 node duckdb
+
+# k6のみ（Linux）
+sudo gpg -k
+sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+sudo apt-get update && sudo apt-get install k6
+
+# DuckDB CLI（Linux）
+wget https://github.com/duckdb/duckdb/releases/download/v0.9.2/duckdb_cli-linux-amd64.zip
+unzip duckdb_cli-linux-amd64.zip && sudo mv duckdb /usr/local/bin/
+```
+
+### リポジトリのクローンと確認
+
+```bash
+git clone <repository-url>
+cd duckdb-load-testing-template
+
+# ディレクトリ構成の確認
+ls -la
+# → CLAUDE.md, README.md, docker-compose.yml, sidecar-go/, k6/, frontend/, ...
+```
+
+---
+
+## デプロイ方法
+
+このツールキットは3つのデプロイ方法をサポートしています：
+
+| 方法 | 用途 | 複雑さ | スケーラビリティ |
+|------|------|--------|-----------------|
+| **Docker Compose** | ローカル開発・検証 | 低 | 単一マシン |
+| **Kubernetes (RustFS/MinIO)** | オンプレミス・プライベートクラウド | 中 | 高 |
+| **Kubernetes (AWS S3)** | AWS本番環境 | 中 | 高 |
+
+---
+
+## 方法1: Docker Compose（ローカル開発）
+
+最も簡単にローカルで試す方法です。RustFS（S3互換ストレージ）とSidecarがすべてコンテナで起動します。
+
+### Step 1: コンテナの起動
 
 ```bash
 # RustFS + Sidecar を起動
 docker compose up -d
 
-# バケットを作成（初回のみ）
+# 起動確認（両方が running になるまで待機）
+docker compose ps
+# NAME             STATUS
+# duckdb-sidecar   Up (healthy)
+# rustfs           Up (healthy)
+
+# ログ確認（問題がある場合）
+docker compose logs -f
+```
+
+### Step 2: S3バケットの作成（初回のみ）
+
+```bash
+# RustFSコンテナ内でバケットを作成
 docker compose exec rustfs mc alias set local http://localhost:9000 rustfs-user rustfs-password
 docker compose exec rustfs mc mb local/loadtest
 
-# k6でテスト実行
+# バケット作成の確認
+docker compose exec rustfs mc ls local/
+# → loadtest/ が表示される
+```
+
+### Step 3: 負荷テストの実行
+
+```bash
+# k6でテスト実行（別ターミナルで）
 cd k6
 SIDECAR_BASE=http://localhost:8081 \
 TARGET=https://httpbin.org/get \
-RUN_ID=test-run \
+RUN_ID=test-$(date +%Y%m%d-%H%M%S) \
 k6 run k6-script.js
 
-# アップロード実行
-curl -X POST http://localhost:8081/api/v1/flush-upload
-
-# RustFS Console で確認: http://localhost:9001
-# ユーザー: rustfs-user / パスワード: rustfs-password
+# テスト中のメトリクス確認
+curl http://localhost:8081/api/v1/stats | jq
 ```
 
-## ローカル開発（手動セットアップ）
-
-### 1. RustFSの起動
+### Step 4: 結果の保存と確認
 
 ```bash
+# DuckDBファイルをS3にアップロード
+curl -X POST http://localhost:8081/api/v1/flush-upload
+
+# ローカルにダウンロード
+curl http://localhost:8081/api/v1/download -o result.duckdb
+
+# DuckDB CLIで確認
+duckdb result.duckdb "SELECT status, COUNT(*) as cnt, AVG(rtt) as avg_rtt FROM metrics GROUP BY status"
+
+# または RustFS Console で確認
+# URL: http://localhost:9001
+# ユーザー: rustfs-user
+# パスワード: rustfs-password
+```
+
+### Step 5: フロントエンドで可視化（オプション）
+
+```bash
+cd frontend
+npm install
+npm start
+# → http://localhost:8080 でブラウザを開き、result.duckdb を選択
+```
+
+### クリーンアップ
+
+```bash
+# コンテナ停止（データは保持）
+docker compose stop
+
+# コンテナとボリュームを完全削除
+docker compose down -v
+```
+
+---
+
+## 方法2: ローカルビルド（手動セットアップ）
+
+Sidecarをローカルでビルドして実行する方法です。デバッグや開発時に有用です。
+
+### Step 1: RustFSの起動
+
+```bash
+# RustFSコンテナを起動
 docker run -d \
   --name rustfs \
   -p 9000:9000 \
@@ -195,18 +307,26 @@ docker run -d \
   -e RUSTFS_ROOT_PASSWORD=rustfs-password \
   rustfs/rustfs server /data --console-address ":9001"
 
+# 起動確認
+docker ps | grep rustfs
+
 # バケット作成
 docker exec rustfs mc alias set local http://localhost:9000 rustfs-user rustfs-password
 docker exec rustfs mc mb local/loadtest
 ```
 
-### 2. Sidecarのビルドと起動
+### Step 2: Sidecarのビルドと起動
 
 ```bash
 cd sidecar-go
+
+# ビルド
 go build -o duckdb-sidecar
 
-# RustFS接続設定付きで起動
+# テスト実行（オプション）
+go test ./...
+
+# Sidecar起動
 S3_ENDPOINT=http://localhost:9000 \
 S3_ACCESS_KEY=rustfs-user \
 S3_SECRET_KEY=rustfs-password \
@@ -214,15 +334,16 @@ S3_BUCKET=loadtest \
 RUN_ID=test-run \
 POD_NAME=local-pod \
 ./duckdb-sidecar
+
+# 別ターミナルでヘルスチェック
+curl http://localhost:8081/api/v1/health
+# → {"status":"ok"}
 ```
 
-### 3. k6でテスト実行
+### Step 3: k6でテスト実行
 
 ```bash
-# k6をインストール（未インストールの場合）
-brew install k6  # macOS
-
-# テスト実行
+# 別ターミナルで
 cd k6
 SIDECAR_BASE=http://localhost:8081 \
 TARGET=https://httpbin.org/get \
@@ -231,87 +352,404 @@ POD_NAME=local-k6 \
 k6 run k6-script.js
 ```
 
-### 4. 結果の確認
+### Step 4: 結果の確認
 
 ```bash
-# アップロード実行
+# アップロード
 curl -X POST http://localhost:8081/api/v1/flush-upload
 
-# RustFS Consoleで確認: http://localhost:9001
-# または直接ダウンロード
+# ダウンロード
 curl http://localhost:8081/api/v1/download -o result.duckdb
 
-# DuckDB CLIで確認
+# 分析
 duckdb result.duckdb
-SELECT status, COUNT(*) as cnt, AVG(rtt) as avg_rtt FROM metrics GROUP BY status;
 ```
 
-### 5. フロントエンドで可視化
+---
+
+## 方法3: Kubernetes + RustFS/MinIO（オンプレミス）
+
+Kubernetes環境でRustFS（またはMinIO）をS3互換ストレージとして使用する方法です。
+
+### Step 1: Sidecar Dockerイメージのビルドとプッシュ
 
 ```bash
-cd frontend
-npm install
-npm start
-# → http://localhost:8080 でブラウザを開き、.duckdbファイルを選択
-```
-
-## Kubernetes環境での使用
-
-### 1. Sidecar Dockerイメージのビルド
-
-```bash
+# イメージ名を設定（自分のレジストリに変更）
 export IMAGE_NAME=your-registry/duckdb-sidecar:latest
+
+# ビルドとプッシュ
 ./scripts/build_and_push_sidecar.sh
+
+# または手動で
+cd sidecar-go
+docker build -t $IMAGE_NAME .
+docker push $IMAGE_NAME
 ```
 
-### 2. Kubernetesマニフェストの設定
+### Step 2: RustFS/MinIOのデプロイ（クラスタ内に未構築の場合）
 
-`k6/k8s/deployment-k6-sidecar.yaml` を編集:
+```bash
+# MinIOをHelmでデプロイする例
+helm repo add minio https://charts.min.io/
+helm install minio minio/minio \
+  --set rootUser=minio-user \
+  --set rootPassword=minio-password \
+  --set persistence.size=10Gi
+
+# または、既存のS3互換ストレージのエンドポイントを使用
+```
+
+### Step 3: シークレットの作成
+
+```bash
+# S3認証情報のシークレット作成
+kubectl create secret generic s3-credentials \
+  --from-literal=access-key=minio-user \
+  --from-literal=secret-key=minio-password
+
+# 確認
+kubectl get secret s3-credentials -o yaml
+```
+
+### Step 4: マニフェストの編集
+
+`k6/k8s/deployment-k6-sidecar.yaml` を編集：
 
 ```yaml
-- name: sidecar
-  image: your-registry/duckdb-sidecar:latest
-  env:
-  # RustFS設定
-  - name: S3_ENDPOINT
-    value: "http://rustfs.default.svc:9000"
-  - name: S3_ACCESS_KEY
-    valueFrom:
-      secretKeyRef:
-        name: rustfs-credentials
-        key: access-key
-  - name: S3_SECRET_KEY
-    valueFrom:
-      secretKeyRef:
-        name: rustfs-credentials
-        key: secret-key
-  - name: S3_BUCKET
-    value: "loadtest"
-  - name: RUN_ID
-    value: "run-20240101-001"
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: k6-load
+  labels:
+    app: k6-load
+spec:
+  replicas: 3  # 負荷に応じて調整
+  selector:
+    matchLabels:
+      app: k6-load
+  template:
+    metadata:
+      labels:
+        app: k6-load
+    spec:
+      containers:
+      - name: k6
+        image: grafana/k6:latest
+        args: ["run", "/scripts/k6-script.js"]
+        env:
+        - name: SIDECAR_BASE
+          value: "http://localhost:8081"
+        - name: TARGET
+          value: "https://your-target-service.com"
+        - name: RUN_ID
+          value: "run-20240101-001"  # テスト実行ごとに変更
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        volumeMounts:
+        - name: scripts
+          mountPath: /scripts
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "256Mi"
+          limits:
+            cpu: "1000m"
+            memory: "512Mi"
+
+      - name: sidecar
+        image: your-registry/duckdb-sidecar:latest  # Step 1でプッシュしたイメージ
+        env:
+        - name: RUN_ID
+          value: "run-20240101-001"
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: S3_ENDPOINT
+          value: "http://minio.default.svc:9000"  # クラスタ内のMinIO
+        - name: S3_BUCKET
+          value: "loadtest"
+        - name: S3_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: s3-credentials
+              key: access-key
+        - name: S3_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: s3-credentials
+              key: secret-key
+        ports:
+        - containerPort: 8081
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+        livenessProbe:
+          httpGet:
+            path: /api/v1/health
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /api/v1/health
+            port: 8081
+          initialDelaySeconds: 3
+          periodSeconds: 5
+
+      volumes:
+      - name: scripts
+        configMap:
+          name: k6-scripts
+      - name: data
+        emptyDir: {}
 ```
 
-### 3. デプロイ
+### Step 5: デプロイ
 
 ```bash
-# シークレット作成
-kubectl create secret generic rustfs-credentials \
-  --from-literal=access-key=rustfs-user \
-  --from-literal=secret-key=rustfs-password
-
-# ConfigMapを作成
+# k6スクリプトのConfigMap作成
 kubectl apply -f k6/k8s/configmap-k6-scripts.yaml
 
-# Deploymentを作成
+# Deployment作成
 kubectl apply -f k6/k8s/deployment-k6-sidecar.yaml
+
+# 起動確認
+kubectl get pods -l app=k6-load -w
+# → すべてのPodが Running になるまで待機
+
+# ログ確認
+kubectl logs -l app=k6-load -c k6 -f
+kubectl logs -l app=k6-load -c sidecar -f
 ```
 
-### 4. 複数ファイルの統合
+### Step 6: テスト完了後のアップロード
 
 ```bash
+# 各Podのsidecarにflush-uploadを実行
+for pod in $(kubectl get pods -l app=k6-load -o jsonpath='{.items[*].metadata.name}'); do
+  echo "Uploading from $pod..."
+  kubectl exec $pod -c sidecar -- curl -X POST http://localhost:8081/api/v1/flush-upload
+done
+```
+
+### Step 7: 結果の統合
+
+```bash
+# Aggregate Jobを実行して複数のDuckDBファイルを統合
 kubectl apply -f aggregate-job/aggregate-scripts-configmap.yaml
 kubectl apply -f aggregate-job/job-aggregate.yaml
-# → RustFSに combined.duckdb が作成される
+
+# Job完了待機
+kubectl wait --for=condition=complete job/aggregate-job --timeout=300s
+
+# 結果の確認
+kubectl logs job/aggregate-job
+# → combined.duckdb が S3 にアップロードされる
+```
+
+---
+
+## 方法4: Kubernetes + AWS S3（本番環境）
+
+AWS EKS環境でS3を使用する方法です。IAMロールによる認証を推奨します。
+
+### Step 1: IAMロールの設定（IRSA）
+
+```bash
+# EKSクラスタでOIDCプロバイダーを有効化（未設定の場合）
+eksctl utils associate-iam-oidc-provider --cluster your-cluster --approve
+
+# S3アクセス用のIAMポリシー作成
+cat > s3-policy.json << 'EOF'
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:ListBucket"
+      ],
+      "Resource": [
+        "arn:aws:s3:::your-loadtest-bucket",
+        "arn:aws:s3:::your-loadtest-bucket/*"
+      ]
+    }
+  ]
+}
+EOF
+
+aws iam create-policy \
+  --policy-name LoadTestS3Policy \
+  --policy-document file://s3-policy.json
+
+# ServiceAccount用のIAMロール作成
+eksctl create iamserviceaccount \
+  --name loadtest-sa \
+  --namespace default \
+  --cluster your-cluster \
+  --attach-policy-arn arn:aws:iam::ACCOUNT_ID:policy/LoadTestS3Policy \
+  --approve
+```
+
+### Step 2: S3バケットの作成
+
+```bash
+# バケット作成
+aws s3 mb s3://your-loadtest-bucket --region ap-northeast-1
+
+# バケットポリシー確認
+aws s3api get-bucket-policy --bucket your-loadtest-bucket
+```
+
+### Step 3: マニフェストの編集（AWS S3用）
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: k6-load
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: k6-load
+  template:
+    metadata:
+      labels:
+        app: k6-load
+    spec:
+      serviceAccountName: loadtest-sa  # IRSAで作成したServiceAccount
+      containers:
+      - name: k6
+        image: grafana/k6:latest
+        args: ["run", "/scripts/k6-script.js"]
+        env:
+        - name: SIDECAR_BASE
+          value: "http://localhost:8081"
+        - name: TARGET
+          value: "https://your-production-api.com"
+        - name: RUN_ID
+          value: "prod-run-20240101"
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        volumeMounts:
+        - name: scripts
+          mountPath: /scripts
+
+      - name: sidecar
+        image: your-ecr-registry/duckdb-sidecar:latest
+        env:
+        - name: RUN_ID
+          value: "prod-run-20240101"
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: S3_BUCKET
+          value: "your-loadtest-bucket"
+        - name: S3_REGION
+          value: "ap-northeast-1"
+        # S3_ENDPOINT を設定しない → AWS S3を使用
+        # S3_ACCESS_KEY, S3_SECRET_KEY を設定しない → IRSAを使用
+        ports:
+        - containerPort: 8081
+        volumeMounts:
+        - name: data
+          mountPath: /data
+
+      volumes:
+      - name: scripts
+        configMap:
+          name: k6-scripts
+      - name: data
+        emptyDir: {}
+```
+
+### Step 4: デプロイと実行
+
+```bash
+# デプロイ
+kubectl apply -f k6/k8s/deployment-k6-sidecar-aws.yaml
+
+# テスト実行を監視
+kubectl logs -l app=k6-load -c k6 -f
+
+# 完了後、アップロード
+for pod in $(kubectl get pods -l app=k6-load -o jsonpath='{.items[*].metadata.name}'); do
+  kubectl exec $pod -c sidecar -- curl -X POST http://localhost:8081/api/v1/flush-upload
+done
+
+# S3で結果を確認
+aws s3 ls s3://your-loadtest-bucket/prod-run-20240101/
+```
+
+---
+
+## 本番環境での考慮事項
+
+### セキュリティ
+
+| 項目 | 推奨事項 |
+|------|---------|
+| **認証情報** | Kubernetes Secretsまたは外部シークレット管理（AWS Secrets Manager、HashiCorp Vault）を使用 |
+| **ネットワーク** | NetworkPolicyでSidecarへのアクセスを制限 |
+| **イメージ** | プライベートレジストリからプル、イメージスキャンを実施 |
+| **RBAC** | 最小権限の原則に従ったServiceAccount設定 |
+
+### スケーリング
+
+```yaml
+# HorizontalPodAutoscaler（オプション）
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: k6-load-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: k6-load
+  minReplicas: 1
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+```
+
+### リソース見積もり
+
+| コンポーネント | CPU | メモリ | ディスク |
+|--------------|-----|--------|---------|
+| k6 (per pod) | 500m-1000m | 256Mi-512Mi | - |
+| Sidecar (per pod) | 100m-500m | 128Mi-512Mi | 100Mi-1Gi (DuckDB) |
+| Aggregate Job | 500m | 1Gi | 10Gi (統合時) |
+
+### モニタリング
+
+```bash
+# Sidecarの統計情報を定期取得
+watch -n 5 'curl -s http://localhost:8081/api/v1/stats | jq'
+
+# WebSocketでリアルタイム監視（開発時）
+websocat ws://localhost:8081/ws
 ```
 
 ## Sidecar API
