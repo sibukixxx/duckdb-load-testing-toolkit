@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/example/duckdb-sidecar/models"
 	_ "github.com/duckdb/duckdb-go/v2"
+	"github.com/example/duckdb-sidecar/models"
 )
 
 func TestNewDuckDBStorage(t *testing.T) {
@@ -87,25 +87,25 @@ func TestDuckDBStorage_Flush(t *testing.T) {
 
 	events := []models.Event{
 		{
-			RunID:       "test-run",
-			Ts:          1704067200000,
-			PodID:       "pod-1",
-			VU:          1,
-			Iter:        1,
-			Method:      "GET",
-			URL:         "https://example.com/api",
-			Name:        "api-call",
-			Status:      200,
-			BodyLen:     1024,
-			RTT:         50.0,
-			DNSLookup:   5.0,
-			TCPConnect:  10.0,
-			TLSHandshake: 15.0,
-			TTFB:        40.0,
+			RunID:           "test-run",
+			Ts:              1704067200000,
+			PodID:           "pod-1",
+			VU:              1,
+			Iter:            1,
+			Method:          "GET",
+			URL:             "https://example.com/api",
+			Name:            "api-call",
+			Status:          200,
+			BodyLen:         1024,
+			RTT:             50.0,
+			DNSLookup:       5.0,
+			TCPConnect:      10.0,
+			TLSHandshake:    15.0,
+			TTFB:            40.0,
 			ContentTransfer: 10.0,
-			RequestSize:  256,
-			ResponseSize: 1280,
-			Tags:        map[string]string{"region": "us-east-1"},
+			RequestSize:     256,
+			ResponseSize:    1280,
+			Tags:            map[string]string{"region": "us-east-1"},
 		},
 		{
 			RunID:     "test-run",
@@ -252,16 +252,16 @@ func TestDuckDBStorage_DetailedTimings(t *testing.T) {
 	defer storage.Close()
 
 	event := models.Event{
-		RunID:          "test",
-		Ts:             1000,
-		PodID:          "pod-1",
-		URL:            "https://example.com",
-		Status:         200,
-		RTT:            100.0,
-		DNSLookup:      5.5,
-		TCPConnect:     10.2,
-		TLSHandshake:   25.3,
-		TTFB:           80.0,
+		RunID:           "test",
+		Ts:              1000,
+		PodID:           "pod-1",
+		URL:             "https://example.com",
+		Status:          200,
+		RTT:             100.0,
+		DNSLookup:       5.5,
+		TCPConnect:      10.2,
+		TLSHandshake:    25.3,
+		TTFB:            80.0,
 		ContentTransfer: 19.0,
 	}
 

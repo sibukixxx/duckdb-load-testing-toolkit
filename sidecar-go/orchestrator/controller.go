@@ -14,10 +14,10 @@ import (
 type PodStatus string
 
 const (
-	PodStatusUnknown  PodStatus = "unknown"
-	PodStatusHealthy  PodStatus = "healthy"
+	PodStatusUnknown   PodStatus = "unknown"
+	PodStatusHealthy   PodStatus = "healthy"
 	PodStatusUnhealthy PodStatus = "unhealthy"
-	PodStatusFlushing PodStatus = "flushing"
+	PodStatusFlushing  PodStatus = "flushing"
 )
 
 // Pod represents a sidecar pod
@@ -40,11 +40,11 @@ type TestRun struct {
 
 // Controller manages distributed load test runs
 type Controller struct {
-	pods     map[string]*Pod
-	podsMu   sync.RWMutex
-	runs     map[string]*TestRun
-	runsMu   sync.RWMutex
-	client   *http.Client
+	pods   map[string]*Pod
+	podsMu sync.RWMutex
+	runs   map[string]*TestRun
+	runsMu sync.RWMutex
+	client *http.Client
 }
 
 // NewController creates a new orchestration controller

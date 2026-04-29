@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "sidecar-go/**"
+      - "Makefile"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "sidecar-go/**"
+      - "Makefile"
+      - ".github/workflows/ci.yml"
+
+defaults:
+  run:
+    working-directory: sidecar-go
+
+jobs:
+  # ── Code quality (fast gate, no test execution) ──────────────────────────────
+  quality:
+    name: Quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: sidecar-go/go.mod
+          cache-dependency-path: sidecar-go/go.sum
+
+      - name: gofmt
+        run: |
+          files=$(gofmt -l .)
+          if [ -n "$files" ]; then
+            echo "::error::These files are not gofmt'd — run 'make fmt':"
+            echo "$files"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+  # ── Unit tests ────────────────────────────────────────────────────────────────
+  unit:
+    name: Unit tests
+    needs: quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: sidecar-go/go.mod
+          cache-dependency-path: sidecar-go/go.sum
+
+      - name: Run unit tests
+        run: |
+          go test \
+            ./analysis/... ./handlers/... ./models/... \
+            ./orchestrator/... ./realtime/... ./storage/... \
+            -race -count=1 -timeout=120s \
+            -coverprofile=coverage.out -covermode=atomic
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-unit
+          path: sidecar-go/coverage.out
+          retention-days: 7
+
+  # ── E2E tests ─────────────────────────────────────────────────────────────────
+  e2e:
+    name: E2E tests
+    needs: quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: sidecar-go/go.mod
+          cache-dependency-path: sidecar-go/go.sum
+
+      - name: Run E2E tests
+        run: |
+          go test ./test/e2e/tests/... \
+            -race -count=1 -timeout=180s -v
+
+  # ── Docker build check ────────────────────────────────────────────────────────
+  docker:
+    name: Docker build
+    needs: quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build sidecar image
+        run: docker build -t duckdb-sidecar:ci .

@@ -162,7 +162,11 @@ func (u *S3Uploader) GetBucket() string {
 	return u.config.Bucket
 }
 
-// IsConfigured returns true if S3 is configured
+// IsConfigured returns true if S3 is configured.
+// Safe to call on a nil receiver (returns false).
 func (u *S3Uploader) IsConfigured() bool {
+	if u == nil {
+		return false
+	}
 	return u.config.Bucket != ""
 }

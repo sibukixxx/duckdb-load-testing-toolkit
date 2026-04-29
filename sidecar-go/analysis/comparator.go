@@ -42,12 +42,12 @@ type Regression struct {
 
 // Thresholds defines acceptable changes for each metric
 type Thresholds struct {
-	P50RTTIncreasePercent     float64 // e.g., 10.0 means 10% increase is allowed
-	P95RTTIncreasePercent     float64
-	P99RTTIncreasePercent     float64
-	ErrorRateIncreasePercent  float64
-	ErrorRateAbsoluteMax      float64 // Maximum absolute error rate
-	RPSDecreasePercent        float64
+	P50RTTIncreasePercent    float64 // e.g., 10.0 means 10% increase is allowed
+	P95RTTIncreasePercent    float64
+	P99RTTIncreasePercent    float64
+	ErrorRateIncreasePercent float64
+	ErrorRateAbsoluteMax     float64 // Maximum absolute error rate
+	RPSDecreasePercent       float64
 }
 
 // DefaultThresholds returns sensible default thresholds

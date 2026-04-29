@@ -25,17 +25,17 @@ type Message struct {
 
 // LiveStats represents real-time statistics
 type LiveStats struct {
-	TotalRequests   int64   `json:"total_requests"`
-	RequestsPerSec  float64 `json:"requests_per_sec"`
-	ErrorCount      int64   `json:"error_count"`
-	ErrorRate       float64 `json:"error_rate"`
-	AvgRTT          float64 `json:"avg_rtt_ms"`
-	P50RTT          float64 `json:"p50_rtt_ms"`
-	P95RTT          float64 `json:"p95_rtt_ms"`
-	P99RTT          float64 `json:"p99_rtt_ms"`
-	ActiveVUs       int     `json:"active_vus"`
-	BufferSize      int     `json:"buffer_size"`
-	LastEventTime   int64   `json:"last_event_time"`
+	TotalRequests  int64   `json:"total_requests"`
+	RequestsPerSec float64 `json:"requests_per_sec"`
+	ErrorCount     int64   `json:"error_count"`
+	ErrorRate      float64 `json:"error_rate"`
+	AvgRTT         float64 `json:"avg_rtt_ms"`
+	P50RTT         float64 `json:"p50_rtt_ms"`
+	P95RTT         float64 `json:"p95_rtt_ms"`
+	P99RTT         float64 `json:"p99_rtt_ms"`
+	ActiveVUs      int     `json:"active_vus"`
+	BufferSize     int     `json:"buffer_size"`
+	LastEventTime  int64   `json:"last_event_time"`
 }
 
 // Hub manages WebSocket clients and broadcasts messages

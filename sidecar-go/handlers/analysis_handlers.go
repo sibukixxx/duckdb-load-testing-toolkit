@@ -25,18 +25,18 @@ func NewAnalysisHandlers(db *sql.DB) *AnalysisHandlers {
 
 // CompareRequest represents a comparison request
 type CompareRequest struct {
-	BaselineRunID string              `json:"baseline_run_id"`
-	CurrentRunID  string              `json:"current_run_id"`
+	BaselineRunID string               `json:"baseline_run_id"`
+	CurrentRunID  string               `json:"current_run_id"`
 	Thresholds    *analysis.Thresholds `json:"thresholds,omitempty"`
 }
 
 // CompareResponse represents a comparison response
 type CompareResponse struct {
-	IsPassing   bool                       `json:"is_passing"`
-	Baseline    *analysis.RunStats         `json:"baseline"`
-	Current     *analysis.RunStats         `json:"current"`
-	Regressions []RegressionResponse       `json:"regressions"`
-	Summary     string                     `json:"summary"`
+	IsPassing   bool                 `json:"is_passing"`
+	Baseline    *analysis.RunStats   `json:"baseline"`
+	Current     *analysis.RunStats   `json:"current"`
+	Regressions []RegressionResponse `json:"regressions"`
+	Summary     string               `json:"summary"`
 }
 
 // RegressionResponse represents a regression in the response
@@ -223,15 +223,15 @@ func (h *AnalysisHandlers) HandleCalculateBaseline(w http.ResponseWriter, r *htt
 	}
 
 	resp := RunStatsResponse{
-		RunID:           baseline.RunID,
-		TotalRequests:   baseline.TotalRequests,
-		ErrorCount:      baseline.ErrorCount,
-		ErrorRate:       analysis.Round(baseline.ErrorRate, 2),
-		AvgRTT:          analysis.Round(baseline.AvgRTT, 2),
-		P50RTT:          analysis.Round(baseline.P50RTT, 2),
-		P95RTT:          analysis.Round(baseline.P95RTT, 2),
-		P99RTT:          analysis.Round(baseline.P99RTT, 2),
-		RPS:             analysis.Round(baseline.RPS, 2),
+		RunID:         baseline.RunID,
+		TotalRequests: baseline.TotalRequests,
+		ErrorCount:    baseline.ErrorCount,
+		ErrorRate:     analysis.Round(baseline.ErrorRate, 2),
+		AvgRTT:        analysis.Round(baseline.AvgRTT, 2),
+		P50RTT:        analysis.Round(baseline.P50RTT, 2),
+		P95RTT:        analysis.Round(baseline.P95RTT, 2),
+		P99RTT:        analysis.Round(baseline.P99RTT, 2),
+		RPS:           analysis.Round(baseline.RPS, 2),
 	}
 
 	writeJSON(w, http.StatusOK, resp)

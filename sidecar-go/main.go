@@ -8,11 +8,11 @@ import (
 	"path/filepath"
 	"time"
 
+	_ "github.com/duckdb/duckdb-go/v2"
 	"github.com/example/duckdb-sidecar/handlers"
 	"github.com/example/duckdb-sidecar/realtime"
+	"github.com/example/duckdb-sidecar/server"
 	"github.com/example/duckdb-sidecar/storage"
-	_ "github.com/duckdb/duckdb-go/v2"
-	"github.com/gorilla/mux"
 )
 
 func main() {
@@ -36,9 +36,14 @@ func main() {
 	defer store.Close()
 
 	// Initialize S3 uploader (optional)
-	uploader, err := storage.NewS3UploaderFromEnv()
+	s3Uploader, err := storage.NewS3UploaderFromEnv()
 	if err != nil {
 		log.Printf("warning: S3 uploader initialization failed: %v", err)
+	}
+	// Avoid a typed-nil interface value when S3 is not configured.
+	var uploader handlers.Uploader
+	if s3Uploader != nil {
+		uploader = s3Uploader
 	}
 
 	// Create handlers
@@ -68,40 +73,8 @@ func main() {
 		}
 	}()
 
-	// Setup router
-	r := mux.NewRouter()
+	r := server.NewRouter(h, analysisHandlers, hub)
 
-	// API v1 routes
-	api := r.PathPrefix("/api/v1").Subrouter()
-
-	// Ingest endpoints
-	api.HandleFunc("/ingest", h.HandleIngest).Methods("POST")
-	api.HandleFunc("/ingest/batch", h.HandleIngestBatch).Methods("POST")
-
-	// Flush endpoints
-	api.HandleFunc("/flush", h.HandleFlush).Methods("POST")
-	api.HandleFunc("/flush-upload", h.HandleFlushUpload).Methods("POST")
-
-	// Data endpoints
-	api.HandleFunc("/download", h.HandleDownload).Methods("GET")
-	api.HandleFunc("/stats", h.HandleStats).Methods("GET")
-
-	// Health check
-	api.HandleFunc("/health", h.HandleHealth).Methods("GET")
-	r.HandleFunc("/health", h.HandleHealth).Methods("GET")
-
-	// Analysis endpoints
-	api.HandleFunc("/analysis/compare", analysisHandlers.HandleCompare).Methods("POST")
-	api.HandleFunc("/analysis/run-stats", analysisHandlers.HandleRunStats).Methods("GET")
-	api.HandleFunc("/analysis/trend", analysisHandlers.HandleTrend).Methods("GET")
-	api.HandleFunc("/analysis/baseline", analysisHandlers.HandleCalculateBaseline).Methods("POST")
-
-	// WebSocket endpoint for realtime monitoring
-	r.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		realtime.ServeWs(hub, w, r)
-	})
-
-	// Server
 	srv := &http.Server{
 		Addr:         ":" + port,
 		Handler:      r,

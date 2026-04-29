@@ -8,16 +8,17 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/example/duckdb-sidecar/models"
-	"github.com/example/duckdb-sidecar/storage"
 	_ "github.com/duckdb/duckdb-go/v2"
+	"github.com/example/duckdb-sidecar/models"
+	duckdbstorage "github.com/example/duckdb-sidecar/storage"
 )
 
 func setupTestHandler(t *testing.T) (*Handlers, func()) {
+	t.Helper()
 	tmpDir := t.TempDir()
 	dbFile := filepath.Join(tmpDir, "test.duckdb")
 
-	store, err := storage.NewDuckDBStorage(dbFile)
+	store, err := duckdbstorage.NewDuckDBStorage(dbFile)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -299,24 +300,24 @@ func TestHandleIngestWithDetailedTimings(t *testing.T) {
 	defer cleanup()
 
 	event := models.Event{
-		RunID:          "test-run",
-		Ts:             1704067200000,
-		PodID:          "pod-1",
-		VU:             1,
-		Iter:           10,
-		Method:         "POST",
-		URL:            "https://example.com/api",
-		Name:           "login",
-		Status:         200,
-		BodyLen:        1024,
-		RTT:            100.0,
-		DNSLookup:      5.0,
-		TCPConnect:     10.0,
-		TLSHandshake:   20.0,
-		TTFB:           80.0,
+		RunID:           "test-run",
+		Ts:              1704067200000,
+		PodID:           "pod-1",
+		VU:              1,
+		Iter:            10,
+		Method:          "POST",
+		URL:             "https://example.com/api",
+		Name:            "login",
+		Status:          200,
+		BodyLen:         1024,
+		RTT:             100.0,
+		DNSLookup:       5.0,
+		TCPConnect:      10.0,
+		TLSHandshake:    20.0,
+		TTFB:            80.0,
 		ContentTransfer: 15.0,
-		RequestSize:    256,
-		ResponseSize:   1280,
+		RequestSize:     256,
+		ResponseSize:    1280,
 		Tags: map[string]string{
 			"region": "us-east-1",
 		},
@@ -333,10 +334,14 @@ func TestHandleIngestWithDetailedTimings(t *testing.T) {
 		t.Errorf("Expected status %d, got %d", http.StatusAccepted, w.Code)
 	}
 
-	// Flush and verify
+	// Flush and verify via underlying DuckDB storage
 	h.storage.Flush()
 
-	rows, err := h.storage.Query("SELECT dns_lookup, tcp_connect, tls_handshake FROM metrics")
+	store, ok := h.storage.(*duckdbstorage.DuckDBStorage)
+	if !ok {
+		t.Fatal("storage is not *DuckDBStorage")
+	}
+	rows, err := store.Query("SELECT dns_lookup, tcp_connect, tls_handshake FROM metrics")
 	if err != nil {
 		t.Fatalf("Query failed: %v", err)
 	}

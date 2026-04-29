@@ -11,19 +11,18 @@ import (
 
 	"github.com/example/duckdb-sidecar/models"
 	"github.com/example/duckdb-sidecar/realtime"
-	"github.com/example/duckdb-sidecar/storage"
 )
 
 // Handlers contains HTTP handlers for the sidecar API
 type Handlers struct {
-	storage  *storage.DuckDBStorage
-	uploader *storage.S3Uploader
+	storage  Storage
+	uploader Uploader
 	runID    string
 	hub      *realtime.Hub
 }
 
 // NewHandlers creates a new Handlers instance
-func NewHandlers(storage *storage.DuckDBStorage, uploader *storage.S3Uploader, runID string) *Handlers {
+func NewHandlers(storage Storage, uploader Uploader, runID string) *Handlers {
 	return &Handlers{
 		storage:  storage,
 		uploader: uploader,
