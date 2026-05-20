@@ -1,13 +1,24 @@
 {
-  "name": "duckdb-wasm-frontend",
-  "version": "0.1.0",
+  "name": "duckdb-loadtest-frontend",
+  "version": "0.2.0",
   "private": true,
-  "dependencies": {
-    "@duckdb/duckdb-wasm": "^1.25.0",
-    "chart.js": "^4.4.0"
-  },
+  "type": "module",
   "scripts": {
-    "start": "parcel index.html --port 8080",
-    "build": "parcel build index.html"
+    "dev": "vite",
+    "start": "vite --port 8080",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview --port 8080",
+    "typecheck": "tsc -b --noEmit"
+  },
+  "dependencies": {
+    "@duckdb/duckdb-wasm": "^1.29.0",
+    "chart.js": "^4.4.7",
+    "preact": "^10.25.4",
+    "preact-iso": "^2.8.1"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.1",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7"
   }
 }

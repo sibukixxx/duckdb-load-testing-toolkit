@@ -18,6 +18,8 @@ sidecar-go/data/
 frontend/node_modules/
 frontend/dist/
 frontend/.parcel-cache/
+frontend/.vite/
+frontend/*.tsbuildinfo
 
 # Claude Code
 .claude/settings.local.json

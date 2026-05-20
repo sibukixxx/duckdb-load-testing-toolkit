@@ -275,8 +275,22 @@ duckdb result.duckdb "SELECT status, COUNT(*) as cnt, AVG(rtt) as avg_rtt FROM m
 ```bash
 cd frontend
 npm install
-npm start
-# → http://localhost:8080 でブラウザを開き、result.duckdb を選択
+npm run dev
+# → http://localhost:8080 を開き、Admin ページから result.duckdb を選択
+```
+
+フロントエンドは Vite + Preact + TypeScript + `preact-iso` 構成です。
+ルート構成:
+
+- `/` ホーム
+- `/offers/:id` Offer 詳細（LP/Offer 検証用の雛形）
+- `/cart` 擬似カート
+- `/thanks` リード送信後
+- `/admin` DuckDB ファイルビューア（旧 `app.js` の機能）
+
+```bash
+npm run build      # tsc -b && vite build（preact-iso prerender 付き）
+npm run preview    # ビルド成果物をローカルでプレビュー
 ```
 
 ### クリーンアップ

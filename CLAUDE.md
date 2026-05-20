@@ -43,8 +43,11 @@ IMAGE_NAME=yourrepo/duckdb-sidecar:latest ./scripts/build_and_push_sidecar.sh
 ### Frontend
 ```bash
 cd frontend && npm install
-npm start                       # Dev server on :8080
-npm run build                   # Production build (parcel)
+npm run dev                     # Vite dev server on :8080
+npm start                       # Alias of `vite --port 8080`
+npm run build                   # tsc -b && vite build (with preact-iso prerender)
+npm run preview                 # Preview the built static site
+npm run typecheck               # tsc -b --noEmit
 ```
 
 ## Architecture
@@ -109,7 +112,10 @@ This is a load testing pipeline template using k6 + Kubernetes + DuckDB + RustFS
 
 **aggregate-job/**: Python script using boto3. Downloads per-pod `.duckdb` files from S3-compatible storage, attaches each, and merges into `metrics_all` table.
 
-**frontend/**: duckdb-wasm + Chart.js. Loads local `.duckdb` file and runs analytics queries in browser.
+**frontend/**: Vite + Preact + TypeScript + [`preact-iso`](https://github.com/preactjs/preact-iso) (routing, `hydrate`, `prerender`). Static site that loads local `.duckdb` files via duckdb-wasm and renders Chart.js.
+- Routes: `/` (home), `/offers/:id` (offer detail), `/cart` (擬似カート), `/thanks` (lead 受付後), `/admin` (DuckDB viewer — 旧 `app.js` の機能を移植), `*` (404)
+- Build (`npm run build`) prerenders all routes to static HTML for static hosting (Cloudflare Pages 等)
+- `src/lib/tracking.ts` exposes `trackPageView` / `trackOfferClick` / `trackCartIntent` / `trackLeadSubmitted` stubs for LP/Offer/Cart 計測導線。現状は console 出力のみで、`src/lib/api.ts` の `postEvent` 経由で将来 API へ差し替え可能。
 
 **docker-compose.yml**: Local development setup with RustFS and Sidecar.
 
