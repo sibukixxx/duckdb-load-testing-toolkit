@@ -42,9 +42,9 @@ IMAGE_NAME=yourrepo/duckdb-sidecar:latest ./scripts/build_and_push_sidecar.sh
 
 ### Frontend
 ```bash
-cd frontend && npm install
-npm start                       # Dev server on :8080
-npm run build                   # Production build (parcel)
+cd frontend && pnpm install
+pnpm start                      # Dev server on :8080
+pnpm build                      # Production build (parcel)
 ```
 
 ## Architecture
