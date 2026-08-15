@@ -50,4 +50,4 @@ docker-build:
 	cd $(SIDECAR_DIR) && docker build -t duckdb-sidecar .
 
 zip:
-	cd /mnt/data && zip -r duckdb-load-testing-template.zip duckdb-load-testing-template
+	cd /mnt/data && zip -r duckdb-load-testing-toolkit.zip duckdb-load-testing-toolkit
