@@ -1,9 +1,29 @@
 # DuckDB Load Testing Toolkit
 
+[![CI](https://github.com/sibukixxx/duckdb-load-testing-toolkit/actions/workflows/ci.yml/badge.svg)](https://github.com/sibukixxx/duckdb-load-testing-toolkit/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Go Version](https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go)](sidecar-go/go.mod)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#project-status-and-contributing)
+
 A portable load-testing pipeline that captures request-level [k6](https://grafana.com/docs/k6/latest/) metrics in [DuckDB](https://duckdb.org/), uploads results to S3-compatible storage, and analyzes them without running a permanent observability stack.
 
 > [!IMPORTANT]
 > This project is under active development. Interfaces and deployment manifests may change before the first stable release.
+
+If you've ever wanted to re-slice a load test after the fact — by endpoint, by pod, by percentile, by anything — instead of being stuck with whatever your dashboard pre-aggregated, this toolkit is for you. A ⭐ on the repo helps other people running k6 tests find it.
+
+## Table of Contents
+
+- [Why this project?](#why-this-project)
+- [How it works](#how-it-works)
+- [Components](#components)
+- [Quick start](#quick-start)
+- [Browser viewer](#browser-viewer)
+- [Sidecar API](#sidecar-api)
+- [Configuration](#configuration)
+- [Development](#development)
+- [Project status and contributing](#project-status-and-contributing)
+- [License](#license)
 
 ## Why this project?
 
@@ -161,6 +181,10 @@ CI runs formatting, vet, build, unit tests, end-to-end tests, and a Docker image
 ## Project status and contributing
 
 The project is currently being prepared for broader contributions. GitHub Issues are temporarily disabled while the core behavior and public roadmap settle. If you would like to contribute in the meantime, open a pull request with a focused change and a clear description of how it was tested.
+
+If this toolkit is useful to you, consider starring the repo — it helps others discover the project.
+
+[![Star History Chart](https://api.star-history.com/svg?repos=sibukixxx/duckdb-load-testing-toolkit&type=Date)](https://star-history.com/#sibukixxx/duckdb-load-testing-toolkit&Date)
 
 ## License
 
