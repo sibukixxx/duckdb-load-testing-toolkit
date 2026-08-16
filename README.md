@@ -1,5 +1,7 @@
 # DuckDB Load Testing Toolkit
 
+English | [简体中文](README.zh-CN.md)
+
 [![CI](https://github.com/sibukixxx/duckdb-load-testing-toolkit/actions/workflows/ci.yml/badge.svg)](https://github.com/sibukixxx/duckdb-load-testing-toolkit/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go)](sidecar-go/go.mod)
@@ -7,8 +9,12 @@
 
 A portable load-testing pipeline that captures request-level [k6](https://grafana.com/docs/k6/latest/) metrics in [DuckDB](https://duckdb.org/), uploads results to S3-compatible storage, and analyzes them without running a permanent observability stack.
 
-> [!IMPORTANT]
-> This project is under active development. Interfaces and deployment manifests may change before the first stable release.
+> [!NOTE]
+> The versioned Sidecar API under `/api/v1` and the `metrics` table schema are the
+> compatibility boundary. Backward-incompatible changes to either require a new
+> API version or a documented migration. Example deployment manifests remain
+> customizable templates; review image tags, credentials, and resource limits
+> before using them in production.
 
 If you've ever wanted to re-slice a load test after the fact — by endpoint, by pod, by percentile, by anything — instead of being stuck with whatever your dashboard pre-aggregated, this toolkit is for you. A ⭐ on the repo helps other people running k6 tests find it.
 
@@ -158,11 +164,11 @@ The sidecar is configured through environment variables.
 | `DATA_DIR` | `/data` | Directory for DuckDB files |
 | `RUN_ID` | `local-run` | Identifier attached to the test run |
 | `POD_NAME` | `pod-local` | Worker or pod identifier |
-| `S3_ENDPOINT` | unset | S3-compatible endpoint; leave unset to disable uploads |
+| `S3_ENDPOINT` | unset | S3-compatible endpoint; leave unset to use the AWS default endpoint |
 | `S3_ACCESS_KEY` | unset | S3 access key |
 | `S3_SECRET_KEY` | unset | S3 secret key |
-| `S3_BUCKET` | unset | Destination bucket |
-| `S3_REGION` | unset | S3 region when required by the provider |
+| `S3_BUCKET` | unset | Destination bucket; leave unset to disable uploads |
+| `S3_REGION` | unset | S3 region when required by the provider; defaults to `us-east-1` |
 
 See [`docker-compose.yml`](docker-compose.yml) for a complete local example and [`k6/k8s/`](k6/k8s/) for Kubernetes manifests.
 
@@ -174,13 +180,14 @@ make test-unit      # run unit tests with the race detector
 make test-e2e       # run end-to-end tests
 make vet            # run go vet
 make fmt            # format Go source files
+make fmt-check      # verify formatting without changing files
 ```
 
 CI runs formatting, vet, build, unit tests, end-to-end tests, and a Docker image build.
 
 ## Project status and contributing
 
-The project is currently being prepared for broader contributions. GitHub Issues are temporarily disabled while the core behavior and public roadmap settle. If you would like to contribute in the meantime, open a pull request with a focused change and a clear description of how it was tested.
+The toolkit is ready for use with the compatibility guarantees described above. Development continues through backward-compatible improvements and documented migrations. GitHub Issues are currently disabled; to contribute, open a pull request with a focused change and a clear description of how it was tested.
 
 If this toolkit is useful to you, consider starring the repo — it helps others discover the project.
 

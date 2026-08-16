@@ -6,7 +6,7 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/example/duckdb-sidecar/analysis"
+	"github.com/sibukixxx/duckdb-load-testing-toolkit/sidecar-go/analysis"
 )
 
 // AnalysisHandlers contains handlers for analysis endpoints

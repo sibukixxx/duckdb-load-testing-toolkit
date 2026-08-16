@@ -1,4 +1,4 @@
-module github.com/example/duckdb-sidecar
+module github.com/sibukixxx/duckdb-load-testing-toolkit/sidecar-go
 
 go 1.24
 

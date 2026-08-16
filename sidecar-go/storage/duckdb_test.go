@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	_ "github.com/duckdb/duckdb-go/v2"
-	"github.com/example/duckdb-sidecar/models"
+	"github.com/sibukixxx/duckdb-load-testing-toolkit/sidecar-go/models"
 )
 
 func TestNewDuckDBStorage(t *testing.T) {

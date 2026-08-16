@@ -1,7 +1,7 @@
 SIDECAR_DIR := sidecar-go
 BINARY      := $(SIDECAR_DIR)/duckdb-sidecar
 
-.PHONY: build-sidecar test test-unit test-e2e lint fmt vet clean docker-build ci zip
+.PHONY: build-sidecar test test-unit test-e2e lint fmt fmt-check vet clean docker-build ci zip
 
 # ── Build ──────────────────────────────────────────────────────────────────────
 
@@ -33,12 +33,20 @@ vet:
 fmt:
 	cd $(SIDECAR_DIR) && gofmt -w -l .
 
+fmt-check:
+	@files="$$(cd $(SIDECAR_DIR) && gofmt -l .)"; \
+	if [ -n "$$files" ]; then \
+	  echo "The following files need gofmt:"; \
+	  echo "$$files"; \
+	  exit 1; \
+	fi
+
 # Requires golangci-lint: https://golangci-lint.run/usage/install/
 lint:
 	cd $(SIDECAR_DIR) && golangci-lint run ./...
 
 # Run vet + unit tests (fast CI gate)
-ci: vet fmt test-unit
+ci: fmt-check vet test-unit
 
 # ── Maintenance ────────────────────────────────────────────────────────────────
 
