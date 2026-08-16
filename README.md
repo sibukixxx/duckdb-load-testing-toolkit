@@ -1,6 +1,6 @@
 # DuckDB Load Testing Toolkit
 
-English | [简体中文](README.zh-CN.md)
+English | [日本語](README.ja.md) | [简体中文](README.zh-CN.md)
 
 [![CI](https://github.com/sibukixxx/duckdb-load-testing-toolkit/actions/workflows/ci.yml/badge.svg)](https://github.com/sibukixxx/duckdb-load-testing-toolkit/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
