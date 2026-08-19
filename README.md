@@ -1,9 +1,21 @@
 # DuckDB Load Testing Toolkit
 
+[![CI](https://github.com/sibukixxx/duckdb-load-testing-toolkit/actions/workflows/ci.yml/badge.svg)](https://github.com/sibukixxx/duckdb-load-testing-toolkit/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Go Version](https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go)](sidecar-go/go.mod)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#project-status-and-contributing)
+
 A portable load-testing pipeline that captures request-level [k6](https://grafana.com/docs/k6/latest/) metrics in [DuckDB](https://duckdb.org/), uploads results to S3-compatible storage, and analyzes them without running a permanent observability stack.
 
 > [!IMPORTANT]
 > This project is under active development. Interfaces and deployment manifests may change before the first stable release.
+
+> [!NOTE]
+> The versioned Sidecar API under `/api/v1` and the `metrics` table schema are the
+> compatibility boundary. Backward-incompatible changes to either require a new
+> API version or a documented migration. Example deployment manifests remain
+> customizable templates; review image tags, credentials, and resource limits
+> before using them in production.
 
 ## Why this project?
 
@@ -15,6 +27,8 @@ Most load-testing dashboards keep pre-aggregated metrics. That is useful during 
 - keep and share a test run as a single `.duckdb` file;
 - analyze results locally or in a browser with DuckDB-Wasm;
 - compare a run with a baseline and detect performance regressions.
+
+If you've ever wanted to re-slice a load test after the fact — by endpoint, by pod, by percentile, by anything — instead of being stuck with whatever your dashboard pre-aggregated, this toolkit is for you. A ⭐ on the repo helps other people running k6 tests find it.
 
 ## How it works
 
