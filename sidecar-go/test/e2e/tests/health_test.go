@@ -4,8 +4,8 @@ import (
 	"testing"
 
 	_ "github.com/duckdb/duckdb-go/v2"
-	"github.com/example/duckdb-sidecar/handlers"
-	"github.com/example/duckdb-sidecar/test/e2e"
+	"github.com/sibukixxx/duckdb-load-testing-toolkit/sidecar-go/handlers"
+	"github.com/sibukixxx/duckdb-load-testing-toolkit/sidecar-go/test/e2e"
 )
 
 func TestE2EHealth_ReturnsOK(t *testing.T) {

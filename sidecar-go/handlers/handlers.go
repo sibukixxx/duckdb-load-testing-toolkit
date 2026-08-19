@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/example/duckdb-sidecar/models"
-	"github.com/example/duckdb-sidecar/realtime"
+	"github.com/sibukixxx/duckdb-load-testing-toolkit/sidecar-go/models"
+	"github.com/sibukixxx/duckdb-load-testing-toolkit/sidecar-go/realtime"
 )
 
 // Handlers contains HTTP handlers for the sidecar API

@@ -18,6 +18,50 @@ Most load-testing dashboards keep pre-aggregated metrics. That is useful during 
 
 ## How it works
 
+English | [日本語](README.ja.md) | [简体中文](README.zh-CN.md)
+
+[![CI](https://github.com/sibukixxx/duckdb-load-testing-toolkit/actions/workflows/ci.yml/badge.svg)](https://github.com/sibukixxx/duckdb-load-testing-toolkit/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Go Version](https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go)](sidecar-go/go.mod)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#project-status-and-contributing)
+
+A portable load-testing pipeline that captures request-level [k6](https://grafana.com/docs/k6/latest/) metrics in [DuckDB](https://duckdb.org/), uploads results to S3-compatible storage, and analyzes them without running a permanent observability stack.
+
+> [!NOTE]
+> The versioned Sidecar API under `/api/v1` and the `metrics` table schema are the
+> compatibility boundary. Backward-incompatible changes to either require a new
+> API version or a documented migration. Example deployment manifests remain
+> customizable templates; review image tags, credentials, and resource limits
+> before using them in production.
+
+If you've ever wanted to re-slice a load test after the fact — by endpoint, by pod, by percentile, by anything — instead of being stuck with whatever your dashboard pre-aggregated, this toolkit is for you. A ⭐ on the repo helps other people running k6 tests find it.
+
+## Table of Contents
+
+- [Why this project?](#why-this-project)
+- [How it works](#how-it-works)
+- [Components](#components)
+- [Quick start](#quick-start)
+- [Browser viewer](#browser-viewer)
+- [Sidecar API](#sidecar-api)
+- [Configuration](#configuration)
+- [Development](#development)
+- [Project status and contributing](#project-status-and-contributing)
+- [License](#license)
+
+## Why this project?
+
+Most load-testing dashboards keep pre-aggregated metrics. That is useful during a run, but it limits the questions you can ask afterward. This toolkit stores one row per request so that you can:
+
+- investigate a specific endpoint, status code, pod, or time window with SQL;
+- inspect DNS, TCP, TLS, TTFB, and total request timing;
+- combine results produced by multiple Kubernetes pods;
+- keep and share a test run as a single `.duckdb` file;
+- analyze results locally or in a browser with DuckDB-Wasm;
+- compare a run with a baseline and detect performance regressions.
+
+## How it works
+
 ```text
 ┌──────────────── Kubernetes pod ────────────────┐
 │                                                │
@@ -138,11 +182,11 @@ The sidecar is configured through environment variables.
 | `DATA_DIR` | `/data` | Directory for DuckDB files |
 | `RUN_ID` | `local-run` | Identifier attached to the test run |
 | `POD_NAME` | `pod-local` | Worker or pod identifier |
-| `S3_ENDPOINT` | unset | S3-compatible endpoint; leave unset to disable uploads |
+| `S3_ENDPOINT` | unset | S3-compatible endpoint; leave unset to use the AWS default endpoint |
 | `S3_ACCESS_KEY` | unset | S3 access key |
 | `S3_SECRET_KEY` | unset | S3 secret key |
-| `S3_BUCKET` | unset | Destination bucket |
-| `S3_REGION` | unset | S3 region when required by the provider |
+| `S3_BUCKET` | unset | Destination bucket; leave unset to disable uploads |
+| `S3_REGION` | unset | S3 region when required by the provider; defaults to `us-east-1` |
 
 See [`docker-compose.yml`](docker-compose.yml) for a complete local example and [`k6/k8s/`](k6/k8s/) for Kubernetes manifests.
 
@@ -154,13 +198,18 @@ make test-unit      # run unit tests with the race detector
 make test-e2e       # run end-to-end tests
 make vet            # run go vet
 make fmt            # format Go source files
+make fmt-check      # verify formatting without changing files
 ```
 
 CI runs formatting, vet, build, unit tests, end-to-end tests, and a Docker image build.
 
 ## Project status and contributing
 
-The project is currently being prepared for broader contributions. GitHub Issues are temporarily disabled while the core behavior and public roadmap settle. If you would like to contribute in the meantime, open a pull request with a focused change and a clear description of how it was tested.
+The toolkit is ready for use with the compatibility guarantees described above. Development continues through backward-compatible improvements and documented migrations. GitHub Issues are currently disabled; to contribute, open a pull request with a focused change and a clear description of how it was tested.
+
+If this toolkit is useful to you, consider starring the repo — it helps others discover the project.
+
+[![Star History Chart](https://api.star-history.com/svg?repos=sibukixxx/duckdb-load-testing-toolkit&type=Date)](https://star-history.com/#sibukixxx/duckdb-load-testing-toolkit&Date)
 
 ## License
 

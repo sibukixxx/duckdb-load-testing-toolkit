@@ -9,10 +9,10 @@ import (
 	"time"
 
 	_ "github.com/duckdb/duckdb-go/v2"
-	"github.com/example/duckdb-sidecar/handlers"
-	"github.com/example/duckdb-sidecar/realtime"
-	"github.com/example/duckdb-sidecar/server"
-	"github.com/example/duckdb-sidecar/storage"
+	"github.com/sibukixxx/duckdb-load-testing-toolkit/sidecar-go/handlers"
+	"github.com/sibukixxx/duckdb-load-testing-toolkit/sidecar-go/realtime"
+	"github.com/sibukixxx/duckdb-load-testing-toolkit/sidecar-go/server"
+	"github.com/sibukixxx/duckdb-load-testing-toolkit/sidecar-go/storage"
 )
 
 func main() {
