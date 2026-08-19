@@ -1,5 +1,23 @@
 # DuckDB Load Testing Toolkit
 
+A portable load-testing pipeline that captures request-level [k6](https://grafana.com/docs/k6/latest/) metrics in [DuckDB](https://duckdb.org/), uploads results to S3-compatible storage, and analyzes them without running a permanent observability stack.
+
+> [!IMPORTANT]
+> This project is under active development. Interfaces and deployment manifests may change before the first stable release.
+
+## Why this project?
+
+Most load-testing dashboards keep pre-aggregated metrics. That is useful during a run, but it limits the questions you can ask afterward. This toolkit stores one row per request so that you can:
+
+- investigate a specific endpoint, status code, pod, or time window with SQL;
+- inspect DNS, TCP, TLS, TTFB, and total request timing;
+- combine results produced by multiple Kubernetes pods;
+- keep and share a test run as a single `.duckdb` file;
+- analyze results locally or in a browser with DuckDB-Wasm;
+- compare a run with a baseline and detect performance regressions.
+
+## How it works
+
 English | [日本語](README.ja.md) | [简体中文](README.zh-CN.md)
 
 [![CI](https://github.com/sibukixxx/duckdb-load-testing-toolkit/actions/workflows/ci.yml/badge.svg)](https://github.com/sibukixxx/duckdb-load-testing-toolkit/actions/workflows/ci.yml)
