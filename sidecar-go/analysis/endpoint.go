@@ -11,22 +11,22 @@ import (
 // run: counts, latency percentiles, and average network/backend timing
 // phases (DNS/TCP/TLS/TTFB/transfer), plus a status code distribution.
 type EndpointStats struct {
-	Endpoint           string
-	RequestCount       int64
-	ErrorCount         int64
-	ErrorRate          float64
-	AvgRTT             float64
-	P50RTT             float64
-	P90RTT             float64
-	P95RTT             float64
-	P99RTT             float64
-	MaxRTT             float64
-	AvgDNS             float64
-	AvgTCP             float64
-	AvgTLS             float64
-	AvgTTFB            float64
-	AvgTransfer        float64
-	StatusDistribution map[string]int64
+	Endpoint           string           `json:"endpoint"`
+	RequestCount       int64            `json:"request_count"`
+	ErrorCount         int64            `json:"error_count"`
+	ErrorRate          float64          `json:"error_rate"`
+	AvgRTT             float64          `json:"avg_rtt_ms"`
+	P50RTT             float64          `json:"p50_rtt_ms"`
+	P90RTT             float64          `json:"p90_rtt_ms"`
+	P95RTT             float64          `json:"p95_rtt_ms"`
+	P99RTT             float64          `json:"p99_rtt_ms"`
+	MaxRTT             float64          `json:"max_rtt_ms"`
+	AvgDNS             float64          `json:"avg_dns_ms"`
+	AvgTCP             float64          `json:"avg_tcp_ms"`
+	AvgTLS             float64          `json:"avg_tls_ms"`
+	AvgTTFB            float64          `json:"avg_ttfb_ms"`
+	AvgTransfer        float64          `json:"avg_transfer_ms"`
+	StatusDistribution map[string]int64 `json:"status_distribution"`
 }
 
 // EndpointAnalyzer computes endpoint-level analysis for a run using the
