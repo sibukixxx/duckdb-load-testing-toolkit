@@ -195,16 +195,18 @@ FAIL    /api/users               p95 (regression)
 cd sidecar-go
 go build -o duckload ./cmd/duckload
 
+# summary/endpoints/compare/diagnose 的位置参数是一个 .duckdb 文件，
+# --baseline/--current 在这些子命令里指的是该文件内的 RUN_ID。
 ./duckload summary result.duckdb --run-id quickstart
 ./duckload endpoints result.duckdb --run-id quickstart
 ./duckload compare result.duckdb --baseline quickstart --current after-change
 ./duckload diagnose result.duckdb --baseline quickstart --current after-change
 ./duckload check-analysis   # 针对每个合成夹具验证所有分析查询
 
-# 性能门禁——详见上方"性能门禁"一节。
-# --baseline/--current 既可以指向各自独立的 .duckdb 文件（若文件中只有一个
-# run_id 会自动识别），也可以配合 --baseline-run-id/--run-id 指向同一个
-# 文件中的某个 run_id。
+# gate 是唯一的例外：--baseline/--current 指的是文件路径（没有位置参数），
+# 若文件中只有一个 run_id 会自动识别；详见上方"性能门禁"一节。
+# 加上 --run-id/--baseline-run-id 可以显式指定 run_id，
+# 也可以像下面这样让两者共用同一个文件。
 ./duckload gate --current current.duckdb --baseline baseline.duckdb --policy performance-policy.yml
 ./duckload gate --current result.duckdb --run-id after-change --baseline result.duckdb --baseline-run-id quickstart --policy performance-policy.yml --format json
 ```
