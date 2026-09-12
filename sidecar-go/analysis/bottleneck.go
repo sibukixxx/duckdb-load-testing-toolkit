@@ -14,8 +14,8 @@ type TimingBreakdown struct {
 
 // TimingChange names one phase and how much it moved, in milliseconds.
 type TimingChange struct {
-	Phase   string
-	DeltaMs float64
+	Phase   string  `json:"phase"`
+	DeltaMs float64 `json:"delta_ms"`
 }
 
 // BottleneckEvidence structures the answer to "what part of the request
@@ -56,25 +56,32 @@ func AnalyzeBottleneck(analyzer *EndpointAnalyzer, baselineRunID, currentRunID s
 		if !ok {
 			continue // Endpoint only present in current run; nothing to compare against.
 		}
-
-		e := BottleneckEvidence{
-			Endpoint: cur.Endpoint,
-			Baseline: TimingBreakdown{DNS: base.AvgDNS, TCP: base.AvgTCP, TLS: base.AvgTLS, TTFB: base.AvgTTFB, Transfer: base.AvgTransfer},
-			Current:  TimingBreakdown{DNS: cur.AvgDNS, TCP: cur.AvgTCP, TLS: cur.AvgTLS, TTFB: cur.AvgTTFB, Transfer: cur.AvgTransfer},
-		}
-		e.Delta = TimingBreakdown{
-			DNS:      e.Current.DNS - e.Baseline.DNS,
-			TCP:      e.Current.TCP - e.Baseline.TCP,
-			TLS:      e.Current.TLS - e.Baseline.TLS,
-			TTFB:     e.Current.TTFB - e.Baseline.TTFB,
-			Transfer: e.Current.Transfer - e.Baseline.Transfer,
-		}
-		e.LargestContributor, e.LargestContributorMs = largestPhase(e.Delta)
-
-		evidence = append(evidence, e)
+		evidence = append(evidence, TimingDelta(base, cur))
 	}
 
 	return evidence, nil
+}
+
+// TimingDelta computes the timing-phase breakdown, per-phase deltas, and
+// largest contributor between an endpoint's baseline and current stats. It
+// does no I/O — callers that already have both EndpointStats in hand (the
+// performance gate, in particular) can use it directly instead of paying
+// for AnalyzeBottleneck's own queries a second time.
+func TimingDelta(baseline, current EndpointStats) BottleneckEvidence {
+	e := BottleneckEvidence{
+		Endpoint: current.Endpoint,
+		Baseline: TimingBreakdown{DNS: baseline.AvgDNS, TCP: baseline.AvgTCP, TLS: baseline.AvgTLS, TTFB: baseline.AvgTTFB, Transfer: baseline.AvgTransfer},
+		Current:  TimingBreakdown{DNS: current.AvgDNS, TCP: current.AvgTCP, TLS: current.AvgTLS, TTFB: current.AvgTTFB, Transfer: current.AvgTransfer},
+	}
+	e.Delta = TimingBreakdown{
+		DNS:      e.Current.DNS - e.Baseline.DNS,
+		TCP:      e.Current.TCP - e.Baseline.TCP,
+		TLS:      e.Current.TLS - e.Baseline.TLS,
+		TTFB:     e.Current.TTFB - e.Baseline.TTFB,
+		Transfer: e.Current.Transfer - e.Baseline.Transfer,
+	}
+	e.LargestContributor, e.LargestContributorMs = largestPhase(e.Delta)
+	return e
 }
 
 // largestPhase returns the phase name with the largest absolute delta, and

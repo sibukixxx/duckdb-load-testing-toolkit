@@ -7,7 +7,17 @@ import (
 	"net/http"
 
 	"github.com/sibukixxx/duckdb-load-testing-toolkit/sidecar-go/analysis"
+	"github.com/sibukixxx/duckdb-load-testing-toolkit/sidecar-go/analysis/gate"
+	"github.com/sibukixxx/duckdb-load-testing-toolkit/sidecar-go/analysis/policy"
 )
+
+// maxAnalysisRequestBody caps the size of a decoded JSON request body for
+// every analysis endpoint. These requests are small control-plane payloads
+// (run_id strings, optional thresholds, an embedded policy) — 1 MiB is
+// generous headroom, not a real payload size — and capping it stops an
+// oversized or malformed body from being buffered into memory in full
+// before json.Decode has a chance to reject it.
+const maxAnalysisRequestBody = 1 << 20 // 1 MiB
 
 // AnalysisHandlers contains handlers for analysis endpoints
 type AnalysisHandlers struct {
@@ -54,6 +64,7 @@ type RegressionResponse struct {
 // HandleCompare compares two test runs
 func (h *AnalysisHandlers) HandleCompare(w http.ResponseWriter, r *http.Request) {
 	var req CompareRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxAnalysisRequestBody)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
@@ -260,6 +271,7 @@ type DiagnoseResponse struct {
 // which pods were affected, how the error rate changed).
 func (h *AnalysisHandlers) HandleDiagnose(w http.ResponseWriter, r *http.Request) {
 	var req DiagnoseRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxAnalysisRequestBody)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
@@ -315,6 +327,67 @@ func (h *AnalysisHandlers) HandleDiagnose(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// GateRequest represents a performance gate evaluation request. Policy is
+// the same schema `duckload gate --policy` reads from a file (see
+// analysis/policy), embedded directly as JSON — policy.Parse accepts it
+// unchanged since JSON is valid YAML. CurrentRunID and BaselineRunID are
+// resolved against this sidecar's own database; evaluating a baseline
+// held in a separate file is a CLI-only capability (see `duckload gate
+// --baseline <file>`), since an HTTP request has only one database to
+// query. Omit BaselineRunID to run in Performance-Budget-only mode.
+type GateRequest struct {
+	CurrentRunID  string          `json:"current_run_id"`
+	BaselineRunID string          `json:"baseline_run_id,omitempty"`
+	Policy        json.RawMessage `json:"policy"`
+}
+
+// HandleGate evaluates the performance gate for one run (and, optionally,
+// a baseline comparison) against an embedded policy, returning the same
+// gate.Result shape `duckload gate --format json` prints. This is the same
+// evaluation engine, not a reimplementation: see analysis/gate.
+func (h *AnalysisHandlers) HandleGate(w http.ResponseWriter, r *http.Request) {
+	var req GateRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxAnalysisRequestBody)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.CurrentRunID == "" {
+		http.Error(w, "current_run_id is required", http.StatusBadRequest)
+		return
+	}
+	if len(req.Policy) == 0 {
+		http.Error(w, "policy is required", http.StatusBadRequest)
+		return
+	}
+
+	pol, err := policy.Parse(req.Policy)
+	if err != nil {
+		http.Error(w, "invalid policy: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	current, err := h.endpoints.GetEndpointStats(req.CurrentRunID)
+	if err != nil {
+		log.Printf("gate error: %v", err)
+		http.Error(w, "failed to analyze current run", http.StatusInternalServerError)
+		return
+	}
+
+	var baseline []analysis.EndpointStats
+	if req.BaselineRunID != "" {
+		baseline, err = h.endpoints.GetEndpointStats(req.BaselineRunID)
+		if err != nil {
+			log.Printf("gate error: %v", err)
+			http.Error(w, "failed to analyze baseline run", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	result := gate.Evaluate(current, baseline, pol)
+	writeJSON(w, http.StatusOK, result)
+}
+
 // TrendResponse represents historical trend response
 type TrendResponse struct {
 	Runs []RunStatsResponse `json:"runs"`
@@ -368,6 +441,7 @@ type BaselineRequest struct {
 // HandleCalculateBaseline calculates baseline from multiple runs
 func (h *AnalysisHandlers) HandleCalculateBaseline(w http.ResponseWriter, r *http.Request) {
 	var req BaselineRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxAnalysisRequestBody)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return

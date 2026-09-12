@@ -1,0 +1,57 @@
+# Example performance policy for duckload gate / POST /api/v1/analysis/gate.
+#
+# Copy this file, rename it (e.g. performance-policy.yml), and adjust the
+# numbers to your own service's traffic and latency profile — these values
+# are a reasonable starting point, not a strict recommendation. See
+# docs/performance-policy.md for the full schema reference and
+# docs/performance-gate.md for how a policy becomes a PASS/WARN/FAIL
+# verdict.
+version: 1
+
+# How an UNKNOWN finding (insufficient samples, no matching baseline
+# endpoint, ...) counts toward the overall gate status. WARN means "surface
+# it, but don't block the build over data the gate couldn't evaluate."
+unknown_treatment: WARN
+
+# Applied to every endpoint unless overridden under `endpoints:` below.
+defaults:
+  # Below this many requests (in either the current or baseline run), an
+  # endpoint's findings become UNKNOWN instead of PASS/WARN/FAIL — a p95
+  # from a handful of requests isn't something to gate a build on.
+  min_samples: 30
+
+  p95:
+    max_ms: 800                     # absolute budget: fail above 800ms p95
+    warn_max_ms: 600                # softer budget: warn above 600ms p95
+    max_regression_percent: 25      # fail if p95 grew more than +25% vs. baseline
+    warn_regression_percent: 15     # warn above +15%
+    min_absolute_regression_ms: 20  # ignore a regression under 20ms even if the % is high (noise floor)
+
+  p99:
+    max_ms: 1500
+    max_regression_percent: 30
+
+  error_rate:
+    max_absolute: 1.0               # fail if the current error rate exceeds 1%
+    warn_max_absolute: 0.5          # warn above 0.5%
+    max_absolute_increase: 1.0      # fail if error rate rose more than 1 percentage point vs. baseline
+
+# Per-endpoint overrides. Each entry merges into `defaults` field by
+# field — an endpoint below still inherits every default field it does
+# not explicitly override. Endpoint keys must match the value duckload
+# endpoints (or GET /api/v1/analysis/endpoints) reports as "endpoint":
+# the k6 request `name` tag when set, otherwise the raw url.
+endpoints:
+  # A payment/checkout-style endpoint: tighter budget, since users notice
+  # slowness here fastest.
+  /api/checkout:
+    p95:
+      max_ms: 500
+      max_regression_percent: 15
+
+  # A reporting/export-style endpoint: naturally slower and spikier, so it
+  # gets a looser budget instead of a policy nobody can ever pass.
+  /api/report:
+    p95:
+      max_ms: 3000
+      max_regression_percent: 40

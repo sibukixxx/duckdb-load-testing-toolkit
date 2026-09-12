@@ -1,0 +1,97 @@
+# Example GitHub Actions workflow for the performance gate.
+#
+# This file is NOT under .github/workflows/ on purpose: copy it there
+# yourself (e.g. .github/workflows/performance-gate.yml) and fill in the
+# two placeholder steps for your own service. See docs/ci-integration.md
+# for the reasoning and for how to reproduce a CI failure locally.
+#
+# Every decision (PASS/WARN/FAIL, what counts as a regression) is made by
+# `duckload gate` — this workflow only calls it and reports its result.
+# No gating logic lives in this YAML, and none should be added to it: a
+# different CI provider should be able to run the exact same three steps
+# (build duckload, produce the two .duckdb files, run duckload gate) and
+# get the exact same verdict.
+name: Performance Gate
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  performance-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: sidecar-go/go.mod
+          cache-dependency-path: sidecar-go/go.sum
+
+      - name: Build duckload
+        run: cd sidecar-go && go build -o duckload ./cmd/duckload
+
+      # Replace this step with however your pipeline produces a result for
+      # the code under review — typically: start your service, run k6
+      # against it with the sidecar attached, then download the sidecar's
+      # .duckdb file (see the Quick start in the top-level README).
+      - name: Run load test against this PR
+        run: |
+          echo "TODO: produce current.duckdb here"
+          exit 1 # remove once this step is implemented
+
+      # Replace this step with however your baseline is produced —
+      # downloading last night's known-good result from your
+      # S3-compatible storage, or from a previous workflow run's
+      # artifact (see docs/ci-integration.md for a sketch of both).
+      - name: Fetch baseline result
+        run: |
+          echo "TODO: produce baseline.duckdb here"
+          exit 1 # remove once this step is implemented
+
+      - name: Run performance gate
+        id: gate
+        shell: bash
+        run: |
+          set +e
+          ./sidecar-go/duckload gate \
+            --current current.duckdb \
+            --baseline baseline.duckdb \
+            --policy docs/examples/performance-policy.example.yml \
+            --format human | tee performance-report.md
+          code=${PIPESTATUS[0]}
+
+          ./sidecar-go/duckload gate \
+            --current current.duckdb \
+            --baseline baseline.duckdb \
+            --policy docs/examples/performance-policy.example.yml \
+            --format json > performance-report.json
+
+          exit "$code"
+
+      # Runs whether the gate passed or failed, so the summary and
+      # artifacts are always available — only the job's overall result
+      # (driven by the "Run performance gate" step above) reflects
+      # PASS/WARN/FAIL.
+      - name: Write step summary
+        if: always()
+        run: |
+          {
+            echo '## Performance Gate'
+            echo '```'
+            cat performance-report.md
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload performance gate artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-gate-report
+          path: |
+            current.duckdb
+            baseline.duckdb
+            performance-report.json
+            performance-report.md
+          if-no-files-found: warn
+          retention-days: 30

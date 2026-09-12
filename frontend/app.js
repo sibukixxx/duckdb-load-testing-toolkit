@@ -137,7 +137,7 @@ document.getElementById('endpointsBtn').onclick = async () => {
 
   const rows = await query(
     `SELECT
-       url AS endpoint,
+       COALESCE(NULLIF(name, ''), url) AS endpoint,
        COUNT(*) AS request_count,
        COUNT(CASE WHEN status >= 400 OR (error_code IS NOT NULL AND error_code != '') THEN 1 END) AS error_count,
        AVG(rtt) AS avg_rtt,
@@ -145,7 +145,7 @@ document.getElementById('endpointsBtn').onclick = async () => {
        PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY rtt) AS p95_rtt,
        PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY rtt) AS p99_rtt
      FROM metrics WHERE run_id = ?
-     GROUP BY url ORDER BY request_count DESC`,
+     GROUP BY COALESCE(NULLIF(name, ''), url) ORDER BY request_count DESC`,
     [runId]
   );
 
@@ -175,12 +175,12 @@ document.getElementById('regressionBtn').onclick = async () => {
   const perRun = async (runId) =>
     query(
       `SELECT
-         url AS endpoint,
+         COALESCE(NULLIF(name, ''), url) AS endpoint,
          COUNT(*) AS request_count,
          COUNT(CASE WHEN status >= 400 OR (error_code IS NOT NULL AND error_code != '') THEN 1 END) AS error_count,
          PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY rtt) AS p95_rtt
        FROM metrics WHERE run_id = ?
-       GROUP BY url`,
+       GROUP BY COALESCE(NULLIF(name, ''), url)`,
       [runId]
     );
 
@@ -237,7 +237,7 @@ document.getElementById('timingBtn').onclick = async () => {
          AVG(tls_handshake) AS tls,
          AVG(ttfb) AS ttfb,
          AVG(content_transfer) AS transfer
-       FROM metrics WHERE run_id = ? AND url = ?`,
+       FROM metrics WHERE run_id = ? AND COALESCE(NULLIF(name, ''), url) = ?`,
       [runId, endpoint]
     );
     return row || { dns: 0, tcp: 0, tls: 0, ttfb: 0, transfer: 0 };
@@ -256,4 +256,80 @@ document.getElementById('timingBtn').onclick = async () => {
       ],
     },
   });
+};
+
+// ---- Gate view ----------------------------------------------------------------
+// A minimal, client-side approximation of `duckload gate`: one p95
+// regression threshold and one absolute error-rate budget, applied to
+// every endpoint. This intentionally does not reimplement the full
+// policy schema (per-endpoint overrides, min_samples, absolute latency
+// budgets, ...) — see analysis/gate for the real evaluation engine, which
+// this view mirrors only closely enough to give a quick PASS/WARN/FAIL
+// read of a loaded result without leaving the browser.
+
+document.getElementById('gateBtn').onclick = async () => {
+  const baselineId = document.getElementById('gateBaselineId').value.trim();
+  const currentId = document.getElementById('gateCurrentId').value.trim();
+  const maxRegressionPct = Number(document.getElementById('gateMaxRegressionPct').value) || 0;
+  const maxErrorRate = Number(document.getElementById('gateMaxErrorRate').value) || 0;
+  if (!baselineId || !currentId) return alert('enter both run ids');
+
+  const perRun = async (runId) =>
+    query(
+      `SELECT
+         COALESCE(NULLIF(name, ''), url) AS endpoint,
+         COUNT(*) AS request_count,
+         COUNT(CASE WHEN status >= 400 OR (error_code IS NOT NULL AND error_code != '') THEN 1 END) AS error_count,
+         PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY rtt) AS p95_rtt
+       FROM metrics WHERE run_id = ?
+       GROUP BY COALESCE(NULLIF(name, ''), url)`,
+      [runId]
+    );
+
+  const [baseline, current] = await Promise.all([perRun(baselineId), perRun(currentId)]);
+  const baselineByEndpoint = Object.fromEntries(baseline.map((r) => [r.endpoint, r]));
+
+  const findings = [];
+  for (const c of current) {
+    const errorRate = c.request_count ? (c.error_count / c.request_count) * 100 : 0;
+    if (errorRate > maxErrorRate) {
+      findings.push({
+        scope: c.endpoint, metric: 'error_rate', check: 'budget', status: 'FAIL',
+        detail: `${round2(errorRate)}% (budget: ${maxErrorRate}%)`,
+      });
+    }
+
+    const b = baselineByEndpoint[c.endpoint];
+    if (!b) {
+      findings.push({ scope: c.endpoint, metric: 'p95', check: 'regression', status: 'UNKNOWN', detail: 'no baseline for this endpoint' });
+      continue;
+    }
+    const changePct = b.p95_rtt ? ((c.p95_rtt - b.p95_rtt) / b.p95_rtt) * 100 : 0;
+    if (changePct > maxRegressionPct) {
+      findings.push({
+        scope: c.endpoint, metric: 'p95', check: 'regression', status: 'FAIL',
+        detail: `${round2(b.p95_rtt)}ms -> ${round2(c.p95_rtt)}ms (+${round2(changePct)}%, allowed +${maxRegressionPct}%)`,
+      });
+    }
+  }
+
+  const failed = findings.filter((f) => f.status === 'FAIL').length;
+  const unknown = findings.filter((f) => f.status === 'UNKNOWN').length;
+  const status = failed > 0 ? 'FAIL' : unknown > 0 ? 'WARN' : 'PASS';
+
+  document.getElementById('gateStatus').innerHTML =
+    `<div><span class="gate-status ${status.toLowerCase()}">${status}</span></div>` +
+    `<div class="gate-summary">${current.length - failed - unknown} passed, ${unknown} unknown, ${failed} failed</div>`;
+
+  renderTable(
+    'gateTable',
+    [
+      { key: 'scope', label: 'Endpoint' },
+      { key: 'metric', label: 'Metric' },
+      { key: 'check', label: 'Check' },
+      { key: 'status', label: 'Status' },
+      { key: 'detail', label: 'Detail' },
+    ],
+    findings
+  );
 };

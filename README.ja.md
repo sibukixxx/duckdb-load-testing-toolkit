@@ -128,6 +128,7 @@ RustFS/MinIO/AWS S3のいずれにも対応することで：
 - **回帰検知**: ベースラインとの自動比較、エンドポイント単位での性能劣化の検出
 - **ボトルネック分析**: DNS/TCP/TLS/TTFB/転送のどの区間が悪化したかを比較
 - **Explain（原因説明）**: どのエンドポイントの、どのタイミング区間が、どのPodで悪化したかを構造化データとして出力（LLMは使用しない、決定論的なSQL/Go実装）
+- **Performance Gate**: YAML/JSONポリシーで設定するPASS/WARN/FAIL判定。CI provider非依存のexit code契約付き
 - **分散オーケストレーション**: 複数Podの一括管理、統合flush
 - **リアルタイム監視**: WebSocketによるライブメトリクスストリーミング
 
@@ -141,10 +142,13 @@ RustFS/MinIO/AWS S3のいずれにも対応することで：
 │   ├── analysis/            # エンドポイント分析・比較分析・回帰検知・Explain
 │   │   ├── queries/         # 分析SQLカタログ（ID・目的・必須列・パラメータ付き）
 │   │   ├── validator/       # DuckDB自身によるSQL検証レイヤー
-│   │   └── fixtures/        # CI用の決定論的な合成性能フィクスチャ
-│   ├── cmd/duckload/        # duckload CLI（.duckdbファイルをオフライン分析）
+│   │   ├── fixtures/        # CI用の決定論的な合成性能・Gateフィクスチャ
+│   │   ├── gate/            # Performance Gateの判定エンジン（PASS/WARN/FAIL）
+│   │   └── policy/          # Performance Policyのスキーマとローダー
+│   ├── cmd/duckload/        # duckload CLI（.duckdbファイルをオフライン分析、gateコマンド含む）
 │   ├── orchestrator/        # 分散オーケストレーション
 │   └── realtime/            # WebSocketリアルタイム監視
+├── docs/                    # Performance Gate/Policy/CI統合のリファレンスとサンプル
 ├── k6/                      # k6スクリプト
 │   ├── k6-script.js         # 基本スクリプト
 │   ├── scenarios/           # 高度なシナリオ
@@ -787,6 +791,7 @@ websocat ws://localhost:8081/ws
 | `/api/v1/analysis/baseline` | POST | 複数ランからベースラインを計算 |
 | `/api/v1/analysis/endpoints` | GET | エンドポイント単位の統計情報を取得 |
 | `/api/v1/analysis/diagnose` | POST | エンドポイント単位の回帰結果と構造化されたExplainを取得 |
+| `/api/v1/analysis/gate` | POST | 内蔵ポリシーでPerformance Gateを評価する |
 
 ### リアルタイムエンドポイント
 
@@ -836,6 +841,36 @@ websocat ws://localhost:8081/ws
 
 分析SQLは `sidecar-go/analysis/queries/sql/` 配下にID・目的・必須列・パラメータ・期待される出力列を明記したドキュメント付きのSQLファイルとして管理しており、Goのハンドラーコードに文字列として埋め込まれていない。軽量なvalidator（`sidecar-go/analysis/validator/`）が、必須列の存在確認・パラメータのバインド・`EXPLAIN`・実際のクエリ実行・出力列の突合を、healthy / latency-regression / error-spike / network-regression / backend-regression / pod-outlier / mixed-regression という7種類の決定論的な合成フィクスチャ（`sidecar-go/analysis/fixtures/`）に対して行うため、実際の負荷テストを実行しなくても分析SQLの破損をCIで検出できる。
 
+エンドポイントの識別には `COALESCE(NULLIF(name, ''), url)` を使う。k6は各リクエストにカーディナリティ爆発を起こさない `name`（例: `login`、`get_profile`。`k6/scenarios/` を参照）を既にタグ付けしており、生の `url` でグルーピングするとクエリパラメータやパスパラメータを含むリクエストがすべて別エンドポイント扱いになってしまうため。
+
+## Performance Gate
+
+Performance Gate（`sidecar-go/analysis/gate`）は、エンドポイント分析の結果を **PASS** / **WARN** / **FAIL** という単一の機械判定可能な結論に変換する。判定ルールはプレーンなYAML/JSONのポリシーファイルで設定するため、CI固有の判定ロジックを一切書かずに、実際の性能劣化が発生した場合にのみマージをブロックできる。
+
+```bash
+duckload gate \
+  --current current.duckdb --baseline baseline.duckdb \
+  --policy performance-policy.yml
+```
+
+```
+PERFORMANCE GATE: FAIL
+14 passed, 2 warned, 1 failed, 0 unknown
+
+FAIL    /api/users               p95 (regression)
+        210.00ms -> 340.00ms  (+61.90%)
+        allowed: +20.00%
+        primary timing change: TTFB +96.00ms
+```
+
+- **1指標につき2種類の独立した判定**: 絶対値によるPerformance Budget（例:「p95は500ms以下」。baseline不要）と、baselineとの相対比較による回帰判定。同じエンドポイントで片方だけ失敗することもある
+- **ノイズに強い設計**: 相対しきい値・絶対値（ミリ秒）の下限・最小サンプル数の3つがすべて揃って初めて回帰と判定する。詳細は [`docs/performance-gate.md`](docs/performance-gate.md#noise-resistance)
+- **根拠不十分なデータからは判定しない**: サンプル数不足やbaselineに存在しないエンドポイントは `UNKNOWN` として扱われる（`unknown_treatment` で挙動を設定可能）。誤ったPASSやFAILを返すことはない
+- **判定エンジンは1つ、入口は3つ**: `duckload gate`・`POST /api/v1/analysis/gate`・このパッケージ自身のテストはすべて同じ `gate.Evaluate` を呼び出す。CIでの失敗は常に同じコマンドでローカル再現できる
+- **Exit code契約**: `0` = PASS（デフォルトではWARNも含む）、`1` = FAIL（`--warn-exit-code 1` 指定時はWARNも含む）、`2` = ツール/入力エラー（性能判定ではない）。詳細は [`docs/performance-gate.md`](docs/performance-gate.md#exit-code-contract)
+
+詳細な仕様は [`docs/performance-gate.md`](docs/performance-gate.md)、ポリシーのスキーマは [`docs/performance-policy.md`](docs/performance-policy.md)（そのままコピーできる[サンプル](docs/examples/performance-policy.example.yml)付き）、CIへの組み込み方は [`docs/ci-integration.md`](docs/ci-integration.md)（[GitHub Actionsのサンプル](docs/examples/github-actions-performance-gate.yml)を含む。`.github/workflows/` への配置は各自で行うこと）を参照。
+
 ## CLI（duckload）
 
 `duckload` はSidecarを起動せずに `.duckdb` 結果ファイルを直接分析するCLI。ダウンロード済み・共有済みのファイルをオフラインで調査する場合に使う。
@@ -849,6 +884,13 @@ go build -o duckload ./cmd/duckload
 ./duckload compare result.duckdb --baseline baseline-v1.0 --current after-optimization
 ./duckload diagnose result.duckdb --baseline baseline-v1.0 --current after-optimization
 ./duckload check-analysis   # 全ての合成フィクスチャに対してカタログ内の全分析SQLを検証する
+
+# Performance Gate — 詳細は上記「Performance Gate」節を参照。
+# --baseline/--current にはそれぞれ独立した .duckdb ファイル（run_idが1つ
+# しかなければ自動検出）、または --baseline-run-id/--run-id と組み合わせて
+# 同一ファイル内のrun_idのいずれも指定できる。
+./duckload gate --current current.duckdb --baseline baseline.duckdb --policy performance-policy.yml
+./duckload gate --current result.duckdb --run-id after-optimization --baseline result.duckdb --baseline-run-id baseline-v1.0 --policy performance-policy.yml --format json
 ```
 
 ## DuckDBスキーマ（拡張版）

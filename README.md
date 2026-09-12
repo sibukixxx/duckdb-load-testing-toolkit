@@ -28,6 +28,7 @@ If you've ever wanted to re-slice a load test after the fact — by endpoint, by
 - [Components](#components)
 - [Quick start](#quick-start)
 - [Analysis](#analysis)
+- [Performance Gate](#performance-gate)
 - [CLI (`duckload`)](#cli-duckload)
 - [Browser viewer](#browser-viewer)
 - [Sidecar API](#sidecar-api)
@@ -46,7 +47,8 @@ Most load-testing dashboards keep pre-aggregated metrics. That is useful during 
 - keep and share a test run as a single `.duckdb` file;
 - analyze results locally or in a browser with DuckDB-Wasm;
 - compare a run with a baseline and detect performance regressions;
-- get a structured, deterministic explanation of *why* a run regressed — which endpoint, which timing phase, which pods.
+- get a structured, deterministic explanation of *why* a run regressed — which endpoint, which timing phase, which pods;
+- gate a CI pipeline on a PASS/WARN/FAIL performance verdict, driven by a plain YAML policy file.
 
 **Portable performance analysis from request-level load-test data.** No permanent observability stack required: run, save, share, query, compare, diagnose.
 
@@ -75,8 +77,11 @@ The k6 script sends request metrics to the Go sidecar. The sidecar buffers them,
 | --- | --- |
 | `sidecar-go/` | HTTP ingestion API, DuckDB storage, S3 upload, analysis, and live WebSocket updates |
 | `sidecar-go/analysis/` | Endpoint analysis, bottleneck evidence, regression detection, explain, and the SQL query catalog |
-| `sidecar-go/analysis/fixtures/` | Deterministic synthetic performance fixtures used to test analysis without a real load test |
+| `sidecar-go/analysis/gate/` | The performance gate's evaluation engine (PASS/WARN/FAIL), independent of any CI provider |
+| `sidecar-go/analysis/policy/` | The performance policy schema (YAML/JSON) and loader |
+| `sidecar-go/analysis/fixtures/` | Deterministic synthetic performance fixtures used to test analysis and the gate without a real load test |
 | `sidecar-go/cmd/duckload/` | `duckload` — an offline CLI for analyzing a `.duckdb` result file directly |
+| `docs/` | Performance gate, policy schema, and CI integration reference; a ready-to-copy example policy and GitHub Actions workflow |
 | `k6/` | Basic and advanced k6 scenarios plus Kubernetes manifests |
 | `aggregate-job/` | Kubernetes job for merging distributed DuckDB result files |
 | `frontend/` | Browser-based DuckDB-Wasm and Chart.js result viewer |
@@ -152,6 +157,19 @@ curl -X POST http://localhost:8081/api/v1/analysis/diagnose \
   -d '{"baseline_run_id": "quickstart", "current_run_id": "after-change"}'
 ```
 
+### 6. Gate a build on the result
+
+Turn the comparison into a CI-friendly PASS/WARN/FAIL verdict with an exit code:
+
+```bash
+cd sidecar-go && go build -o duckload ./cmd/duckload
+./duckload gate \
+  --current result.duckdb --run-id after-change \
+  --baseline result.duckdb --baseline-run-id quickstart \
+  --policy ../docs/examples/performance-policy.example.yml
+echo "exit code: $?"
+```
+
 To stop the local stack while keeping its volumes:
 
 ```bash
@@ -169,6 +187,36 @@ Beyond the run-level `compare`/`run-stats`/`trend`/`baseline` endpoints, the sid
 
 Every analysis SQL query lives in `sidecar-go/analysis/queries/sql/` as a documented, named artifact (purpose, required columns, parameters, expected output) rather than a string embedded in a handler. A lightweight validator (`sidecar-go/analysis/validator/`) checks each query's required columns, binds its parameters, runs `EXPLAIN`, executes it, and compares its result columns against what it declares — against seven deterministic synthetic fixtures (`sidecar-go/analysis/fixtures/`: healthy, latency-regression, error-spike, network-regression, backend-regression, pod-outlier, mixed-regression) so a broken analysis query is caught in CI without running a real load test.
 
+Endpoints are identified by `COALESCE(NULLIF(name, ''), url)`: k6 already tags each request with a cardinality-safe `name` (e.g. `login`, `get_profile` — see `k6/scenarios/`), and grouping by the raw `url` instead would explode endpoint cardinality on any request carrying a query string or path parameter.
+
+## Performance Gate
+
+The performance gate (`sidecar-go/analysis/gate`) turns an endpoint analysis into a single machine-checkable verdict — **PASS**, **WARN**, or **FAIL** — driven by a plain YAML/JSON policy file, so CI can block a merge on a real performance regression without any provider-specific gating logic:
+
+```bash
+duckload gate \
+  --current current.duckdb --baseline baseline.duckdb \
+  --policy performance-policy.yml
+```
+
+```
+PERFORMANCE GATE: FAIL
+14 passed, 2 warned, 1 failed, 0 unknown
+
+FAIL    /api/users               p95 (regression)
+        210.00ms -> 340.00ms  (+61.90%)
+        allowed: +20.00%
+        primary timing change: TTFB +96.00ms
+```
+
+- **Two independent checks per metric**: an absolute **Performance Budget** (e.g. "p95 must stay under 500ms", no baseline needed) and a baseline-relative **regression** check — an endpoint can fail one and pass the other.
+- **Noise-resistant by construction**: a relative threshold, an absolute-millisecond floor, and a minimum sample size all have to agree before something counts as a regression — see [`docs/performance-gate.md`](docs/performance-gate.md#noise-resistance).
+- **Never guesses from insufficient data**: too few samples, or an endpoint the baseline never saw, becomes an `UNKNOWN` finding — configurable via `unknown_treatment` — instead of a false PASS or FAIL.
+- **One evaluation engine, three doors in**: `duckload gate`, `POST /api/v1/analysis/gate`, and this package's own tests all call the exact same `gate.Evaluate` — a CI failure is always reproducible locally with the same command.
+- **Exit code contract**: `0` = PASS (or WARN by default), `1` = FAIL (or WARN with `--warn-exit-code 1`), `2` = a tool/input error (never a performance verdict) — see [`docs/performance-gate.md`](docs/performance-gate.md#exit-code-contract).
+
+See [`docs/performance-gate.md`](docs/performance-gate.md) for the full contract, [`docs/performance-policy.md`](docs/performance-policy.md) for the policy schema (with a ready-to-copy [example](docs/examples/performance-policy.example.yml)), and [`docs/ci-integration.md`](docs/ci-integration.md) for wiring it into a pipeline (a worked [GitHub Actions example](docs/examples/github-actions-performance-gate.yml) included — copy it into `.github/workflows/` yourself).
+
 ## CLI (`duckload`)
 
 `duckload` analyzes a `.duckdb` result file directly, without a running sidecar — useful once a file has been downloaded or shared.
@@ -182,6 +230,13 @@ go build -o duckload ./cmd/duckload
 ./duckload compare result.duckdb --baseline quickstart --current after-change
 ./duckload diagnose result.duckdb --baseline quickstart --current after-change
 ./duckload check-analysis   # validates every catalog query against every synthetic fixture
+
+# Performance gate — see the Performance Gate section above.
+# --baseline/--current each accept either a separate .duckdb file (its
+# run_id is auto-detected if the file has exactly one) or, combined with
+# --baseline-run-id/--run-id, a run_id within the same file.
+./duckload gate --current current.duckdb --baseline baseline.duckdb --policy performance-policy.yml
+./duckload gate --current result.duckdb --run-id after-change --baseline result.duckdb --baseline-run-id quickstart --policy performance-policy.yml --format json
 ```
 
 ## Browser viewer
@@ -198,6 +253,7 @@ Open `http://localhost:8080` and select a DuckDB result file. Queries run locall
 - **Endpoints** — per-endpoint request/error counts and latency percentiles.
 - **Regression** — per-endpoint p95 and error-rate deltas between a baseline and a current run.
 - **Timing Breakdown** — DNS/TCP/TLS/TTFB/transfer averages for one endpoint, baseline vs. current.
+- **Gate** — a minimal, client-side PASS/WARN/FAIL check (one p95 regression threshold, one error-rate budget) so a result can be sanity-checked without leaving the browser; use `duckload gate` or the HTTP endpoint for the full policy schema.
 
 ## Sidecar API
 
@@ -216,6 +272,7 @@ Open `http://localhost:8080` and select a DuckDB result file. Queries run locall
 | `POST` | `/api/v1/analysis/baseline` | Calculate a baseline from multiple runs |
 | `GET` | `/api/v1/analysis/endpoints` | Per-endpoint statistics for a run |
 | `POST` | `/api/v1/analysis/diagnose` | Per-endpoint regression findings plus a structured explanation |
+| `POST` | `/api/v1/analysis/gate` | Evaluate the [performance gate](docs/performance-gate.md) against an embedded policy |
 | `GET` | `/ws` | Stream live metrics over WebSocket |
 
 ## Configuration
@@ -244,12 +301,14 @@ make build-cli      # build the duckload CLI
 make test-unit      # run unit tests with the race detector
 make test-e2e       # run end-to-end tests
 make test-analysis  # validate every analysis SQL query against every synthetic fixture
+make test-gate      # policy schema + gate evaluation engine, against every synthetic gate fixture
+make bench-gate     # synthetic cost check for the gate at 100k/1M requests (not part of `make test`)
 make vet            # run go vet
 make fmt            # format Go source files
 make fmt-check      # verify formatting without changing files
 ```
 
-CI runs formatting, vet, build, unit tests, analysis SQL validation, end-to-end tests, and a Docker image build.
+CI runs formatting, vet, build, unit tests, analysis SQL validation, end-to-end tests, and a Docker image build. (`test-unit`'s `./analysis/...` already covers the gate and policy packages; `test-gate` is a convenience target for running just that slice.)
 
 ## Project status and contributing
 

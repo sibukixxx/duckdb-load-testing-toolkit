@@ -104,13 +104,19 @@ type genOptions struct {
 	errorRate     float64
 	seed          uint64
 	podMultiplier map[string]componentProfile // per-pod override of the identity multiplier
+	n             int                         // request count; 0 means requestsPerEndpoint
 }
 
 func generate(opt genOptions) []models.Event {
-	rng := newLCG(opt.seed)
-	events := make([]models.Event, 0, requestsPerEndpoint)
+	n := opt.n
+	if n <= 0 {
+		n = requestsPerEndpoint
+	}
 
-	for i := 0; i < requestsPerEndpoint; i++ {
+	rng := newLCG(opt.seed)
+	events := make([]models.Event, 0, n)
+
+	for i := 0; i < n; i++ {
 		pod := pods[i%len(pods)]
 		mult := identity()
 		if opt.podMultiplier != nil {

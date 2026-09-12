@@ -21,7 +21,8 @@
 - 将一次测试保存为单个 `.duckdb` 文件，便于共享；
 - 在本地或浏览器中使用 DuckDB-Wasm 分析结果；
 - 与基线对比并检测性能回归；
-- 获得结构化、确定性的回归原因说明——具体是哪个接口、哪个耗时阶段、哪些 Pod。
+- 获得结构化、确定性的回归原因说明——具体是哪个接口、哪个耗时阶段、哪些 Pod；
+- 用一份纯 YAML 策略文件驱动 PASS/WARN/FAIL 判定，为 CI 流水线设置性能门禁。
 
 **基于请求级负载测试数据的可移植性能分析。** 无需常设的可观测性平台即可完成运行、保存、共享、查询、对比与诊断。
 
@@ -50,8 +51,11 @@ k6 脚本将请求指标发送给 Go Sidecar。Sidecar 在内存中缓冲数据�
 | --- | --- |
 | `sidecar-go/` | HTTP 数据接收 API、DuckDB 存储、S3 上传、结果分析和 WebSocket 实时更新 |
 | `sidecar-go/analysis/` | 接口级分析、瓶颈证据、回归检测、原因说明，以及 SQL 查询目录 |
-| `sidecar-go/analysis/fixtures/` | 确定性的合成性能夹具，无需真实负载测试即可验证分析功能 |
+| `sidecar-go/analysis/gate/` | 性能门禁的判定引擎（PASS/WARN/FAIL），不依赖任何 CI 提供方 |
+| `sidecar-go/analysis/policy/` | 性能策略的 Schema（YAML/JSON）与加载器 |
+| `sidecar-go/analysis/fixtures/` | 确定性的合成性能夹具，无需真实负载测试即可验证分析与门禁功能 |
 | `sidecar-go/cmd/duckload/` | `duckload`——直接分析 `.duckdb` 结果文件的离线命令行工具 |
+| `docs/` | 性能门禁、策略 Schema、CI 集成参考文档；可直接复制使用的示例策略与 GitHub Actions 工作流 |
 | `k6/` | 基础及高级 k6 场景，以及 Kubernetes 部署清单 |
 | `aggregate-job/` | 合并分布式 DuckDB 结果文件的 Kubernetes Job |
 | `frontend/` | 基于 DuckDB-Wasm 和 Chart.js 的浏览器结果查看器 |
@@ -107,6 +111,35 @@ duckdb result.duckdb \
   "SELECT status, count(*) AS requests, avg(rtt) AS avg_rtt FROM metrics GROUP BY status"
 ```
 
+### 4. 分析与对比
+
+用不同的 `RUN_ID`（例如 `after-change`）再次运行测试，下载该结果（由于 Sidecar 进程在两次运行之间未重启，两个 run_id 的数据都会写入同一个数据库文件），然后对比两次测试：
+
+```bash
+curl -X POST http://localhost:8081/api/v1/analysis/compare \
+  -H 'Content-Type: application/json' \
+  -d '{"baseline_run_id": "quickstart", "current_run_id": "after-change"}'
+```
+
+### 5. 诊断回归原因
+
+```bash
+curl -X POST http://localhost:8081/api/v1/analysis/diagnose \
+  -H 'Content-Type: application/json' \
+  -d '{"baseline_run_id": "quickstart", "current_run_id": "after-change"}'
+```
+
+### 6. 用性能门禁判定本次构建
+
+```bash
+cd sidecar-go && go build -o duckload ./cmd/duckload
+./duckload gate \
+  --current result.duckdb --run-id after-change \
+  --baseline result.duckdb --baseline-run-id quickstart \
+  --policy ../docs/examples/performance-policy.example.yml
+echo "exit code: $?"
+```
+
 停止本地环境并保留数据卷：
 
 ```bash
@@ -124,6 +157,36 @@ docker compose stop
 
 每条分析 SQL 都保存在 `sidecar-go/analysis/queries/sql/` 中，作为带有说明（用途、所需列、参数、预期输出）的独立文档化产物，而不是嵌在 handler 代码里的字符串。轻量级验证器（`sidecar-go/analysis/validator/`）会检查每条查询所需的列、绑定参数、执行 `EXPLAIN`、运行查询并比对结果列——针对七种确定性的合成夹具（`sidecar-go/analysis/fixtures/`：healthy、latency-regression、error-spike、network-regression、backend-regression、pod-outlier、mixed-regression），从而无需真实负载测试即可在 CI 中发现损坏的分析查询。
 
+接口身份统一使用 `COALESCE(NULLIF(name, ''), url)`：k6 已经为每个请求打上了不受基数爆炸影响的 `name` 标签（例如 `login`、`get_profile`，参见 `k6/scenarios/`），若直接按原始 `url` 分组，带查询参数或路径参数的请求会被误判为各不相同的接口。
+
+## 性能门禁（Performance Gate）
+
+性能门禁（`sidecar-go/analysis/gate`）把一次接口分析转化为单一的、可供机器判断的结论——**PASS**、**WARN** 或 **FAIL**——由一份纯 YAML/JSON 策略文件驱动，因此 CI 无需任何厂商特定的判定逻辑即可在真正发生性能回归时阻止合并：
+
+```bash
+duckload gate \
+  --current current.duckdb --baseline baseline.duckdb \
+  --policy performance-policy.yml
+```
+
+```
+PERFORMANCE GATE: FAIL
+14 passed, 2 warned, 1 failed, 0 unknown
+
+FAIL    /api/users               p95 (regression)
+        210.00ms -> 340.00ms  (+61.90%)
+        allowed: +20.00%
+        primary timing change: TTFB +96.00ms
+```
+
+- **每个指标两项独立检查**：绝对的 **Performance Budget**（例如"p95 必须低于 500ms"，无需基线）与相对基线的**回归**检查——同一接口可以一项失败、另一项通过。
+- **天生抗噪声**：相对阈值、绝对毫秒级下限、最小样本量三者必须同时满足才会被判定为回归——详见 [`docs/performance-gate.md`](docs/performance-gate.md#noise-resistance)。
+- **绝不用不足的证据妄下判断**：样本不足，或基线中不存在的接口，都会得到 `UNKNOWN` 结论（可通过 `unknown_treatment` 配置），而不是误判为 PASS 或 FAIL。
+- **一套判定引擎，三个入口**：`duckload gate`、`POST /api/v1/analysis/gate` 以及该包自身的测试，调用的都是同一个 `gate.Evaluate`——CI 中的失败结果永远可以用同一条命令在本地复现。
+- **退出码约定**：`0` = PASS（或默认情况下的 WARN）、`1` = FAIL（或使用 `--warn-exit-code 1` 时的 WARN）、`2` = 工具/输入错误（绝不代表性能判定）——详见 [`docs/performance-gate.md`](docs/performance-gate.md#exit-code-contract)。
+
+完整约定见 [`docs/performance-gate.md`](docs/performance-gate.md)，策略 Schema 见 [`docs/performance-policy.md`](docs/performance-policy.md)（附带可直接复制的[示例](docs/examples/performance-policy.example.yml)），CI 接入方式见 [`docs/ci-integration.md`](docs/ci-integration.md)（其中包含一份完整的 [GitHub Actions 示例](docs/examples/github-actions-performance-gate.yml)——请自行复制到 `.github/workflows/` 下）。
+
 ## CLI（`duckload`）
 
 `duckload` 可以直接分析 `.duckdb` 结果文件，无需运行 Sidecar——适合文件已下载或共享之后使用。
@@ -137,6 +200,13 @@ go build -o duckload ./cmd/duckload
 ./duckload compare result.duckdb --baseline quickstart --current after-change
 ./duckload diagnose result.duckdb --baseline quickstart --current after-change
 ./duckload check-analysis   # 针对每个合成夹具验证所有分析查询
+
+# 性能门禁——详见上方"性能门禁"一节。
+# --baseline/--current 既可以指向各自独立的 .duckdb 文件（若文件中只有一个
+# run_id 会自动识别），也可以配合 --baseline-run-id/--run-id 指向同一个
+# 文件中的某个 run_id。
+./duckload gate --current current.duckdb --baseline baseline.duckdb --policy performance-policy.yml
+./duckload gate --current result.duckdb --run-id after-change --baseline result.duckdb --baseline-run-id quickstart --policy performance-policy.yml --format json
 ```
 
 ## 浏览器结果查看器
@@ -153,6 +223,7 @@ npm start
 - **Endpoints**——每个接口的请求/错误数和延迟百分位数。
 - **Regression**——基线与当前测试之间每个接口的 p95 与错误率差值。
 - **Timing Breakdown**——单个接口的 DNS/TCP/TLS/TTFB/传输平均耗时，基线与当前对比。
+- **Gate**——一个最简化的客户端 PASS/WARN/FAIL 检查（一个 p95 回归阈值、一个错误率预算），无需离开浏览器即可对结果做初步判断；完整策略 Schema 请使用 `duckload gate` 或 HTTP 接口。
 
 ## Sidecar API
 
@@ -171,6 +242,7 @@ npm start
 | `POST` | `/api/v1/analysis/baseline` | 从多次测试计算基线 |
 | `GET` | `/api/v1/analysis/endpoints` | 获取一次测试的接口级统计信息 |
 | `POST` | `/api/v1/analysis/diagnose` | 获取接口级回归结果及结构化原因说明 |
+| `POST` | `/api/v1/analysis/gate` | 使用内嵌策略评估[性能门禁](docs/performance-gate.md) |
 | `GET` | `/ws` | 通过 WebSocket 接收实时指标 |
 
 ## 配置
@@ -199,12 +271,14 @@ make build-cli      # 构建 duckload 命令行工具
 make test-unit      # 使用 race detector 运行单元测试
 make test-e2e       # 运行端到端测试
 make test-analysis  # 针对每个合成夹具验证所有分析 SQL 查询
+make test-gate      # 针对每个合成门禁夹具验证策略 Schema 与判定引擎
+make bench-gate     # 100k/1M 请求规模下门禁性能的合成基准测试（不包含在 `make test` 中）
 make vet            # 运行 go vet
 make fmt            # 格式化 Go 源代码
 make fmt-check      # 检查格式但不修改文件
 ```
 
-CI 会检查格式、运行 `go vet`、构建程序、执行单元测试、分析 SQL 验证和端到端测试，并验证 Docker 镜像能够成功构建。
+CI 会检查格式、运行 `go vet`、构建程序、执行单元测试、分析 SQL 验证和端到端测试，并验证 Docker 镜像能够成功构建。（`test-unit` 使用的 `./analysis/...` 已经涵盖 gate 与 policy 包；`test-gate` 只是方便单独运行这部分的快捷方式。）
 
 ## 项目状态与贡献
 
