@@ -30,6 +30,9 @@ k6 + Kubernetes + DuckDB を組み合わせた負荷テストパイプライン�
 - 単一の`.duckdb`ファイルとして持ち運び可能
 - duckdb-wasmでブラウザ上でも分析可能（サーバー不要）
 - 過去のテスト結果との比較・回帰検知が容易
+- 「どのエンドポイントの、どのタイミング区間が、どのPodで」悪化したかを構造化された形で説明可能
+
+中心的な価値は **request-level load-test dataからのportableな性能分析** — 常設の監視スタックなしで run → save → share → query → compare → diagnose を実現すること。
 
 ### ユースケース
 
@@ -122,7 +125,10 @@ RustFS/MinIO/AWS S3のいずれにも対応することで：
 
 - **詳細メトリクス**: DNS解決、TCP接続、TLSハンドシェイク、TTFB等の詳細タイミング
 - **シナリオテスト**: 認証フロー、複数エンドポイント、データ駆動テスト対応
-- **回帰検知**: ベースラインとの自動比較、性能劣化の検出
+- **回帰検知**: ベースラインとの自動比較、エンドポイント単位での性能劣化の検出
+- **ボトルネック分析**: DNS/TCP/TLS/TTFB/転送のどの区間が悪化したかを比較
+- **Explain（原因説明）**: どのエンドポイントの、どのタイミング区間が、どのPodで悪化したかを構造化データとして出力（LLMは使用しない、決定論的なSQL/Go実装）
+- **Performance Gate**: YAML/JSONポリシーで設定するPASS/WARN/FAIL判定。CI provider非依存のexit code契約付き
 - **分散オーケストレーション**: 複数Podの一括管理、統合flush
 - **リアルタイム監視**: WebSocketによるライブメトリクスストリーミング
 
@@ -133,9 +139,16 @@ RustFS/MinIO/AWS S3のいずれにも対応することで：
 │   ├── models/              # データモデル
 │   ├── storage/             # DuckDB・S3ストレージ
 │   ├── handlers/            # HTTPハンドラー
-│   ├── analysis/            # 比較分析・回帰検知
+│   ├── analysis/            # エンドポイント分析・比較分析・回帰検知・Explain
+│   │   ├── queries/         # 分析SQLカタログ（ID・目的・必須列・パラメータ付き）
+│   │   ├── validator/       # DuckDB自身によるSQL検証レイヤー
+│   │   ├── fixtures/        # CI用の決定論的な合成性能・Gateフィクスチャ
+│   │   ├── gate/            # Performance Gateの判定エンジン（PASS/WARN/FAIL）
+│   │   └── policy/          # Performance Policyのスキーマとローダー
+│   ├── cmd/duckload/        # duckload CLI（.duckdbファイルをオフライン分析、gateコマンド含む）
 │   ├── orchestrator/        # 分散オーケストレーション
 │   └── realtime/            # WebSocketリアルタイム監視
+├── docs/                    # Performance Gate/Policy/CI統合のリファレンスとサンプル
 ├── k6/                      # k6スクリプト
 │   ├── k6-script.js         # 基本スクリプト
 │   ├── scenarios/           # 高度なシナリオ
@@ -772,10 +785,13 @@ websocat ws://localhost:8081/ws
 
 | エンドポイント | メソッド | 説明 |
 |---------------|---------|------|
-| `/api/v1/analysis/compare` | POST | 2つのランを比較して回帰を検出 |
+| `/api/v1/analysis/compare` | POST | 2つのランを全体レベルで比較して回帰を検出 |
 | `/api/v1/analysis/run-stats` | GET | 特定ランの統計情報を取得 |
 | `/api/v1/analysis/trend` | GET | 履歴トレンドを取得 |
 | `/api/v1/analysis/baseline` | POST | 複数ランからベースラインを計算 |
+| `/api/v1/analysis/endpoints` | GET | エンドポイント単位の統計情報を取得 |
+| `/api/v1/analysis/diagnose` | POST | エンドポイント単位の回帰結果と構造化されたExplainを取得 |
+| `/api/v1/analysis/gate` | POST | 内蔵ポリシーでPerformance Gateを評価する |
 
 ### リアルタイムエンドポイント
 
@@ -812,6 +828,69 @@ websocat ws://localhost:8081/ws
     "scenario": "auth_flow"
   }
 }
+```
+
+## 分析機能（Analysis）
+
+`/api/v1/analysis/compare` などの全体レベルの比較に加え、エンドポイント単位の分析とExplain（原因説明）を提供する。
+
+- **エンドポイント分析**: エンドポイントごとのリクエスト数・エラー数・レイテンシパーセンタイル（p50/p90/p95/p99）・ステータス分布・DNS/TCP/TLS/TTFB/転送の平均タイミング
+- **ボトルネック証拠（Bottleneck Evidence）**: baseline/currentの間で、DNS・TCP・TLS・TTFB・転送のどの区間が最も悪化したかをエンドポイントごとに比較する。原因の自動推定は行わず、根拠となる数値の提示にとどめる
+- **回帰検知（Regression Detection）**: `{metric, scope, baseline, current, change_percent, severity}` という機械判定可能な形式でエンドポイント単位の回帰を報告する。しきい値は既存の比較機能と同じ設定を利用する
+- **Explain**: 回帰が検出されたエンドポイントごとに、p95の変化・最も変化したタイミング区間・同じエンドポイントの他Podより明らかに悪化したPod・エラー率の変化を構造化データとして返す。LLMは使用せず、SQL/Goによる決定論的な計算のみで構成される
+
+分析SQLは `sidecar-go/analysis/queries/sql/` 配下にID・目的・必須列・パラメータ・期待される出力列を明記したドキュメント付きのSQLファイルとして管理しており、Goのハンドラーコードに文字列として埋め込まれていない。軽量なvalidator（`sidecar-go/analysis/validator/`）が、必須列の存在確認・パラメータのバインド・`EXPLAIN`・実際のクエリ実行・出力列の突合を、healthy / latency-regression / error-spike / network-regression / backend-regression / pod-outlier / mixed-regression という7種類の決定論的な合成フィクスチャ（`sidecar-go/analysis/fixtures/`）に対して行うため、実際の負荷テストを実行しなくても分析SQLの破損をCIで検出できる。
+
+エンドポイントの識別には `COALESCE(NULLIF(name, ''), url)` を使う。k6は各リクエストにカーディナリティ爆発を起こさない `name`（例: `login`、`get_profile`。`k6/scenarios/` を参照）を既にタグ付けしており、生の `url` でグルーピングするとクエリパラメータやパスパラメータを含むリクエストがすべて別エンドポイント扱いになってしまうため。
+
+## Performance Gate
+
+Performance Gate（`sidecar-go/analysis/gate`）は、エンドポイント分析の結果を **PASS** / **WARN** / **FAIL** という単一の機械判定可能な結論に変換する。判定ルールはプレーンなYAML/JSONのポリシーファイルで設定するため、CI固有の判定ロジックを一切書かずに、実際の性能劣化が発生した場合にのみマージをブロックできる。
+
+```bash
+duckload gate \
+  --current current.duckdb --baseline baseline.duckdb \
+  --policy performance-policy.yml
+```
+
+```
+PERFORMANCE GATE: FAIL
+14 passed, 2 warned, 1 failed, 0 unknown
+
+FAIL    /api/users               p95 (regression)
+        210.00ms -> 340.00ms  (+61.90%)
+        allowed: +20.00%
+        primary timing change: TTFB +96.00ms
+```
+
+- **1指標につき2種類の独立した判定**: 絶対値によるPerformance Budget（例:「p95は500ms以下」。baseline不要）と、baselineとの相対比較による回帰判定。同じエンドポイントで片方だけ失敗することもある
+- **ノイズに強い設計**: 相対しきい値・絶対値（ミリ秒）の下限・最小サンプル数の3つがすべて揃って初めて回帰と判定する。詳細は [`docs/performance-gate.md`](docs/performance-gate.md#noise-resistance)
+- **根拠不十分なデータからは判定しない**: サンプル数不足やbaselineに存在しないエンドポイントは `UNKNOWN` として扱われる（`unknown_treatment` で挙動を設定可能）。誤ったPASSやFAILを返すことはない
+- **判定エンジンは1つ、入口は3つ**: `duckload gate`・`POST /api/v1/analysis/gate`・このパッケージ自身のテストはすべて同じ `gate.Evaluate` を呼び出す。CIでの失敗は常に同じコマンドでローカル再現できる
+- **Exit code契約**: `0` = PASS（デフォルトではWARNも含む）、`1` = FAIL（`--warn-exit-code 1` 指定時はWARNも含む）、`2` = ツール/入力エラー（性能判定ではない）。詳細は [`docs/performance-gate.md`](docs/performance-gate.md#exit-code-contract)
+
+詳細な仕様は [`docs/performance-gate.md`](docs/performance-gate.md)、ポリシーのスキーマは [`docs/performance-policy.md`](docs/performance-policy.md)（そのままコピーできる[サンプル](docs/examples/performance-policy.example.yml)付き）、CIへの組み込み方は [`docs/ci-integration.md`](docs/ci-integration.md)（[GitHub Actionsのサンプル](docs/examples/github-actions-performance-gate.yml)を含む。`.github/workflows/` への配置は各自で行うこと）を参照。
+
+## CLI（duckload）
+
+`duckload` はSidecarを起動せずに `.duckdb` 結果ファイルを直接分析するCLI。ダウンロード済み・共有済みのファイルをオフラインで調査する場合に使う。
+
+```bash
+cd sidecar-go
+go build -o duckload ./cmd/duckload
+
+./duckload summary result.duckdb --run-id test-run
+./duckload endpoints result.duckdb --run-id test-run
+./duckload compare result.duckdb --baseline baseline-v1.0 --current after-optimization
+./duckload diagnose result.duckdb --baseline baseline-v1.0 --current after-optimization
+./duckload check-analysis   # 全ての合成フィクスチャに対してカタログ内の全分析SQLを検証する
+
+# Performance Gate — 詳細は上記「Performance Gate」節を参照。
+# --baseline/--current にはそれぞれ独立した .duckdb ファイル（run_idが1つ
+# しかなければ自動検出）、または --baseline-run-id/--run-id と組み合わせて
+# 同一ファイル内のrun_idのいずれも指定できる。
+./duckload gate --current current.duckdb --baseline baseline.duckdb --policy performance-policy.yml
+./duckload gate --current result.duckdb --run-id after-optimization --baseline result.duckdb --baseline-run-id baseline-v1.0 --policy performance-policy.yml --format json
 ```
 
 ## DuckDBスキーマ（拡張版）
@@ -961,6 +1040,22 @@ SELECT
 FROM metrics
 WHERE run_id IN ('baseline-v1.0', 'after-optimization')
 GROUP BY run_id;
+```
+
+### 4. 原因の診断（Diagnose）
+
+比較で回帰が見つかったら、どのエンドポイントの、どのタイミング区間が、どのPodで悪化したのかを確認する：
+
+```bash
+curl -X POST http://localhost:8081/api/v1/analysis/diagnose \
+  -H "Content-Type: application/json" \
+  -d '{"baseline_run_id": "baseline-v1.0", "current_run_id": "after-optimization"}'
+```
+
+または `duckdb-sidecar` を起動せずに、ダウンロード済みの `.duckdb` ファイルに対して `duckload` CLIで直接診断する：
+
+```bash
+duckload diagnose result.duckdb --baseline baseline-v1.0 --current after-optimization
 ```
 
 ---

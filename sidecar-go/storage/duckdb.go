@@ -41,47 +41,50 @@ func NewDuckDBStorage(dbFile string) (*DuckDBStorage, error) {
 	return storage, nil
 }
 
+// MetricsTableSchema is the canonical DDL for the `metrics` table. It is
+// exported so other packages (analysis fixtures, tests) can build a
+// schema-identical DuckDB instance without duplicating the definition.
+const MetricsTableSchema = `
+CREATE TABLE IF NOT EXISTS metrics (
+	-- Identification
+	ts BIGINT,
+	run_id VARCHAR,
+	pod_id VARCHAR,
+	vu INTEGER,
+	iter INTEGER,
+
+	-- Request info
+	method VARCHAR,
+	url VARCHAR,
+	name VARCHAR,
+
+	-- Response info
+	status INTEGER,
+	body_len INTEGER,
+
+	-- Detailed timings (milliseconds)
+	rtt DOUBLE,
+	dns_lookup DOUBLE,
+	tcp_connect DOUBLE,
+	tls_handshake DOUBLE,
+	ttfb DOUBLE,
+	content_transfer DOUBLE,
+
+	-- Size metrics
+	request_size INTEGER,
+	response_size INTEGER,
+
+	-- Error handling
+	error_code VARCHAR,
+	error_msg VARCHAR,
+
+	-- Custom tags (JSON)
+	tags VARCHAR
+);`
+
 // initSchema creates the metrics table with extended schema
 func (s *DuckDBStorage) initSchema() error {
-	schema := `
-	CREATE TABLE IF NOT EXISTS metrics (
-		-- Identification
-		ts BIGINT,
-		run_id VARCHAR,
-		pod_id VARCHAR,
-		vu INTEGER,
-		iter INTEGER,
-
-		-- Request info
-		method VARCHAR,
-		url VARCHAR,
-		name VARCHAR,
-
-		-- Response info
-		status INTEGER,
-		body_len INTEGER,
-
-		-- Detailed timings (milliseconds)
-		rtt DOUBLE,
-		dns_lookup DOUBLE,
-		tcp_connect DOUBLE,
-		tls_handshake DOUBLE,
-		ttfb DOUBLE,
-		content_transfer DOUBLE,
-
-		-- Size metrics
-		request_size INTEGER,
-		response_size INTEGER,
-
-		-- Error handling
-		error_code VARCHAR,
-		error_msg VARCHAR,
-
-		-- Custom tags (JSON)
-		tags VARCHAR
-	);`
-
-	_, err := s.db.Exec(schema)
+	_, err := s.db.Exec(MetricsTableSchema)
 	if err != nil {
 		return fmt.Errorf("failed to create table: %w", err)
 	}

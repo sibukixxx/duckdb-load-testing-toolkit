@@ -1,12 +1,16 @@
 SIDECAR_DIR := sidecar-go
 BINARY      := $(SIDECAR_DIR)/duckdb-sidecar
+CLI_BINARY  := $(SIDECAR_DIR)/duckload
 
-.PHONY: build-sidecar test test-unit test-e2e lint fmt fmt-check vet clean docker-build ci zip
+.PHONY: build-sidecar build-cli test test-unit test-e2e test-analysis test-gate bench-gate lint fmt fmt-check vet clean docker-build ci zip
 
 # ── Build ──────────────────────────────────────────────────────────────────────
 
 build-sidecar:
 	cd $(SIDECAR_DIR) && go build -o duckdb-sidecar
+
+build-cli:
+	cd $(SIDECAR_DIR) && go build -o duckload ./cmd/duckload
 
 # ── Test ───────────────────────────────────────────────────────────────────────
 
@@ -16,7 +20,7 @@ test: test-unit test-e2e
 # Unit tests only (excludes E2E directory)
 test-unit:
 	cd $(SIDECAR_DIR) && go test \
-	  ./analysis/... ./handlers/... ./models/... \
+	  ./analysis/... ./cmd/... ./handlers/... ./models/... \
 	  ./orchestrator/... ./realtime/... ./storage/... \
 	  -v -race -count=1
 
@@ -24,6 +28,29 @@ test-unit:
 test-e2e:
 	cd $(SIDECAR_DIR) && go test ./test/e2e/tests/... \
 	  -v -race -count=1 $(if $(E2E_RUN),-run $(E2E_RUN),)
+
+# Analysis SQL validation pipeline: build every synthetic fixture, then
+# validate + execute every catalog query against it (see analysis/queries,
+# analysis/fixtures, analysis/validator). Runnable locally the same way CI
+# runs it, and independently of the rest of the unit test suite.
+test-analysis:
+	cd $(SIDECAR_DIR) && go test \
+	  ./analysis/queries/... ./analysis/fixtures/... ./analysis/validator/... \
+	  -v -race -count=1
+	cd $(SIDECAR_DIR) && go run ./cmd/duckload check-analysis
+
+# Performance gate: policy schema, evaluation engine, and CLI/API
+# integration, run against every synthetic gate fixture (see
+# analysis/fixtures/gate_fixtures.go).
+test-gate:
+	cd $(SIDECAR_DIR) && go test \
+	  ./analysis/policy/... ./analysis/gate/... \
+	  -v -race -count=1
+
+# Synthetic cost check for the performance gate at 100k/1M requests (see
+# analysis/gate/bench_test.go). Not part of `make test`; run on demand.
+bench-gate:
+	cd $(SIDECAR_DIR) && go test ./analysis/gate/... -run '^$$' -bench . -benchtime 1x -v
 
 # ── Code quality ───────────────────────────────────────────────────────────────
 
@@ -51,7 +78,7 @@ ci: fmt-check vet test-unit
 # ── Maintenance ────────────────────────────────────────────────────────────────
 
 clean:
-	rm -f $(BINARY)
+	rm -f $(BINARY) $(CLI_BINARY)
 	rm -rf $(SIDECAR_DIR)/data/*.duckdb $(SIDECAR_DIR)/data/*.duckdb.wal
 
 docker-build:
