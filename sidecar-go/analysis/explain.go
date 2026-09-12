@@ -13,16 +13,16 @@ import (
 // rate changed. It is built entirely from SQL/Go arithmetic — no LLM or
 // heuristic scoring beyond the configured Thresholds.
 type Explanation struct {
-	RegressionDetected  bool
-	Endpoint            string
-	P95BaselineMs       float64
-	P95CurrentMs        float64
-	P95ChangePercent    float64
-	LargestTimingChange TimingChange
-	AffectedPods        []string
-	ErrorRateBaseline   float64
-	ErrorRateCurrent    float64
-	Severity            string
+	RegressionDetected  bool         `json:"regression_detected"`
+	Endpoint            string       `json:"endpoint"`
+	P95BaselineMs       float64      `json:"p95_baseline_ms"`
+	P95CurrentMs        float64      `json:"p95_current_ms"`
+	P95ChangePercent    float64      `json:"p95_change_percent"`
+	LargestTimingChange TimingChange `json:"largest_timing_change"`
+	AffectedPods        []string     `json:"affected_pods"`
+	ErrorRateBaseline   float64      `json:"error_rate_baseline"`
+	ErrorRateCurrent    float64      `json:"error_rate_current"`
+	Severity            string       `json:"severity"`
 }
 
 // podOutlierMultiplier is how far above an endpoint's current-run average
