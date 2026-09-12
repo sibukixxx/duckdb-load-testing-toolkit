@@ -30,6 +30,9 @@ k6 + Kubernetes + DuckDB を組み合わせた負荷テストパイプライン�
 - 単一の`.duckdb`ファイルとして持ち運び可能
 - duckdb-wasmでブラウザ上でも分析可能（サーバー不要）
 - 過去のテスト結果との比較・回帰検知が容易
+- 「どのエンドポイントの、どのタイミング区間が、どのPodで」悪化したかを構造化された形で説明可能
+
+中心的な価値は **request-level load-test dataからのportableな性能分析** — 常設の監視スタックなしで run → save → share → query → compare → diagnose を実現すること。
 
 ### ユースケース
 
@@ -122,7 +125,9 @@ RustFS/MinIO/AWS S3のいずれにも対応することで：
 
 - **詳細メトリクス**: DNS解決、TCP接続、TLSハンドシェイク、TTFB等の詳細タイミング
 - **シナリオテスト**: 認証フロー、複数エンドポイント、データ駆動テスト対応
-- **回帰検知**: ベースラインとの自動比較、性能劣化の検出
+- **回帰検知**: ベースラインとの自動比較、エンドポイント単位での性能劣化の検出
+- **ボトルネック分析**: DNS/TCP/TLS/TTFB/転送のどの区間が悪化したかを比較
+- **Explain（原因説明）**: どのエンドポイントの、どのタイミング区間が、どのPodで悪化したかを構造化データとして出力（LLMは使用しない、決定論的なSQL/Go実装）
 - **分散オーケストレーション**: 複数Podの一括管理、統合flush
 - **リアルタイム監視**: WebSocketによるライブメトリクスストリーミング
 
@@ -133,7 +138,11 @@ RustFS/MinIO/AWS S3のいずれにも対応することで：
 │   ├── models/              # データモデル
 │   ├── storage/             # DuckDB・S3ストレージ
 │   ├── handlers/            # HTTPハンドラー
-│   ├── analysis/            # 比較分析・回帰検知
+│   ├── analysis/            # エンドポイント分析・比較分析・回帰検知・Explain
+│   │   ├── queries/         # 分析SQLカタログ（ID・目的・必須列・パラメータ付き）
+│   │   ├── validator/       # DuckDB自身によるSQL検証レイヤー
+│   │   └── fixtures/        # CI用の決定論的な合成性能フィクスチャ
+│   ├── cmd/duckload/        # duckload CLI（.duckdbファイルをオフライン分析）
 │   ├── orchestrator/        # 分散オーケストレーション
 │   └── realtime/            # WebSocketリアルタイム監視
 ├── k6/                      # k6スクリプト
@@ -772,10 +781,12 @@ websocat ws://localhost:8081/ws
 
 | エンドポイント | メソッド | 説明 |
 |---------------|---------|------|
-| `/api/v1/analysis/compare` | POST | 2つのランを比較して回帰を検出 |
+| `/api/v1/analysis/compare` | POST | 2つのランを全体レベルで比較して回帰を検出 |
 | `/api/v1/analysis/run-stats` | GET | 特定ランの統計情報を取得 |
 | `/api/v1/analysis/trend` | GET | 履歴トレンドを取得 |
 | `/api/v1/analysis/baseline` | POST | 複数ランからベースラインを計算 |
+| `/api/v1/analysis/endpoints` | GET | エンドポイント単位の統計情報を取得 |
+| `/api/v1/analysis/diagnose` | POST | エンドポイント単位の回帰結果と構造化されたExplainを取得 |
 
 ### リアルタイムエンドポイント
 
@@ -812,6 +823,32 @@ websocat ws://localhost:8081/ws
     "scenario": "auth_flow"
   }
 }
+```
+
+## 分析機能（Analysis）
+
+`/api/v1/analysis/compare` などの全体レベルの比較に加え、エンドポイント単位の分析とExplain（原因説明）を提供する。
+
+- **エンドポイント分析**: エンドポイントごとのリクエスト数・エラー数・レイテンシパーセンタイル（p50/p90/p95/p99）・ステータス分布・DNS/TCP/TLS/TTFB/転送の平均タイミング
+- **ボトルネック証拠（Bottleneck Evidence）**: baseline/currentの間で、DNS・TCP・TLS・TTFB・転送のどの区間が最も悪化したかをエンドポイントごとに比較する。原因の自動推定は行わず、根拠となる数値の提示にとどめる
+- **回帰検知（Regression Detection）**: `{metric, scope, baseline, current, change_percent, severity}` という機械判定可能な形式でエンドポイント単位の回帰を報告する。しきい値は既存の比較機能と同じ設定を利用する
+- **Explain**: 回帰が検出されたエンドポイントごとに、p95の変化・最も変化したタイミング区間・同じエンドポイントの他Podより明らかに悪化したPod・エラー率の変化を構造化データとして返す。LLMは使用せず、SQL/Goによる決定論的な計算のみで構成される
+
+分析SQLは `sidecar-go/analysis/queries/sql/` 配下にID・目的・必須列・パラメータ・期待される出力列を明記したドキュメント付きのSQLファイルとして管理しており、Goのハンドラーコードに文字列として埋め込まれていない。軽量なvalidator（`sidecar-go/analysis/validator/`）が、必須列の存在確認・パラメータのバインド・`EXPLAIN`・実際のクエリ実行・出力列の突合を、healthy / latency-regression / error-spike / network-regression / backend-regression / pod-outlier / mixed-regression という7種類の決定論的な合成フィクスチャ（`sidecar-go/analysis/fixtures/`）に対して行うため、実際の負荷テストを実行しなくても分析SQLの破損をCIで検出できる。
+
+## CLI（duckload）
+
+`duckload` はSidecarを起動せずに `.duckdb` 結果ファイルを直接分析するCLI。ダウンロード済み・共有済みのファイルをオフラインで調査する場合に使う。
+
+```bash
+cd sidecar-go
+go build -o duckload ./cmd/duckload
+
+./duckload summary result.duckdb --run-id test-run
+./duckload endpoints result.duckdb --run-id test-run
+./duckload compare result.duckdb --baseline baseline-v1.0 --current after-optimization
+./duckload diagnose result.duckdb --baseline baseline-v1.0 --current after-optimization
+./duckload check-analysis   # 全ての合成フィクスチャに対してカタログ内の全分析SQLを検証する
 ```
 
 ## DuckDBスキーマ（拡張版）
@@ -961,6 +998,22 @@ SELECT
 FROM metrics
 WHERE run_id IN ('baseline-v1.0', 'after-optimization')
 GROUP BY run_id;
+```
+
+### 4. 原因の診断（Diagnose）
+
+比較で回帰が見つかったら、どのエンドポイントの、どのタイミング区間が、どのPodで悪化したのかを確認する：
+
+```bash
+curl -X POST http://localhost:8081/api/v1/analysis/diagnose \
+  -H "Content-Type: application/json" \
+  -d '{"baseline_run_id": "baseline-v1.0", "current_run_id": "after-optimization"}'
+```
+
+または `duckdb-sidecar` を起動せずに、ダウンロード済みの `.duckdb` ファイルに対して `duckload` CLIで直接診断する：
+
+```bash
+duckload diagnose result.duckdb --baseline baseline-v1.0 --current after-optimization
 ```
 
 ---

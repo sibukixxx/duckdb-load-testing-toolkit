@@ -29,6 +29,8 @@ func NewRouter(h *handlers.Handlers, ah *handlers.AnalysisHandlers, hub *realtim
 	api.HandleFunc("/analysis/run-stats", ah.HandleRunStats).Methods("GET")
 	api.HandleFunc("/analysis/trend", ah.HandleTrend).Methods("GET")
 	api.HandleFunc("/analysis/baseline", ah.HandleCalculateBaseline).Methods("POST")
+	api.HandleFunc("/analysis/endpoints", ah.HandleEndpoints).Methods("GET")
+	api.HandleFunc("/analysis/diagnose", ah.HandleDiagnose).Methods("POST")
 
 	r.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		realtime.ServeWs(hub, w, r)

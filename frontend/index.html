@@ -3,13 +3,70 @@
   <head>
     <meta charset="utf-8" />
     <title>DuckDB WASM Viewer</title>
+    <style>
+      body { font-family: sans-serif; margin: 1.5rem; max-width: 960px; }
+      nav { display: flex; gap: 0.5rem; margin: 1rem 0; flex-wrap: wrap; }
+      nav button { padding: 0.4rem 0.8rem; cursor: pointer; }
+      nav button[aria-selected="true"] { font-weight: bold; background: #333; color: #fff; }
+      section.view { display: none; }
+      section.view.active { display: block; }
+      .run-inputs { display: flex; gap: 0.5rem; margin-bottom: 0.75rem; flex-wrap: wrap; }
+      .run-inputs input { padding: 0.3rem; }
+      table { border-collapse: collapse; width: 100%; margin-top: 0.5rem; font-size: 0.9rem; }
+      th, td { border: 1px solid #ccc; padding: 0.3rem 0.5rem; text-align: right; }
+      th:first-child, td:first-child { text-align: left; }
+      canvas { max-width: 100%; margin-top: 1rem; }
+    </style>
   </head>
   <body>
     <h1>DuckDB WASM Viewer</h1>
+    <p>Load a <code>.duckdb</code> result file produced by the sidecar (or the aggregate job) and analyze it entirely in the browser.</p>
     <input id="fileInput" type="file" />
     <button id="loadBtn">Load file</button>
-    <pre id="out"></pre>
-    <canvas id="chart" width="600" height="300"></canvas>
+
+    <nav id="tabs" role="tablist">
+      <button data-view="summary" aria-selected="true">Summary</button>
+      <button data-view="endpoints">Endpoints</button>
+      <button data-view="regression">Regression</button>
+      <button data-view="timing">Timing Breakdown</button>
+    </nav>
+
+    <section id="view-summary" class="view active">
+      <div class="run-inputs">
+        <label>run_id <input id="summaryRunId" placeholder="e.g. current" /></label>
+        <button id="summaryBtn">Run</button>
+      </div>
+      <canvas id="summaryChart" width="600" height="280"></canvas>
+      <pre id="summaryOut"></pre>
+    </section>
+
+    <section id="view-endpoints" class="view">
+      <div class="run-inputs">
+        <label>run_id <input id="endpointsRunId" placeholder="e.g. current" /></label>
+        <button id="endpointsBtn">Run</button>
+      </div>
+      <div id="endpointsTable"></div>
+    </section>
+
+    <section id="view-regression" class="view">
+      <div class="run-inputs">
+        <label>baseline run_id <input id="regBaselineId" placeholder="e.g. baseline" /></label>
+        <label>current run_id <input id="regCurrentId" placeholder="e.g. current" /></label>
+        <button id="regressionBtn">Compare</button>
+      </div>
+      <div id="regressionTable"></div>
+    </section>
+
+    <section id="view-timing" class="view">
+      <div class="run-inputs">
+        <label>baseline run_id <input id="timingBaselineId" placeholder="e.g. baseline" /></label>
+        <label>current run_id <input id="timingCurrentId" placeholder="e.g. current" /></label>
+        <label>endpoint <input id="timingEndpoint" placeholder="e.g. /api/orders" /></label>
+        <button id="timingBtn">Run</button>
+      </div>
+      <canvas id="timingChart" width="600" height="280"></canvas>
+    </section>
+
     <script type="module" src="./app.js"></script>
   </body>
 </html>

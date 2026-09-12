@@ -8,6 +8,7 @@
 
 # Go
 sidecar-go/duckdb-sidecar
+sidecar-go/duckload
 
 # Data files
 *.duckdb

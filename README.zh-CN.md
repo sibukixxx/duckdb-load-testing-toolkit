@@ -20,7 +20,10 @@
 - 合并多个 Kubernetes Pod 生成的测试结果；
 - 将一次测试保存为单个 `.duckdb` 文件，便于共享；
 - 在本地或浏览器中使用 DuckDB-Wasm 分析结果；
-- 与基线对比并检测性能回归。
+- 与基线对比并检测性能回归；
+- 获得结构化、确定性的回归原因说明——具体是哪个接口、哪个耗时阶段、哪些 Pod。
+
+**基于请求级负载测试数据的可移植性能分析。** 无需常设的可观测性平台即可完成运行、保存、共享、查询、对比与诊断。
 
 ## 工作原理
 
@@ -46,6 +49,9 @@ k6 脚本将请求指标发送给 Go Sidecar。Sidecar 在内存中缓冲数据�
 | 路径 | 用途 |
 | --- | --- |
 | `sidecar-go/` | HTTP 数据接收 API、DuckDB 存储、S3 上传、结果分析和 WebSocket 实时更新 |
+| `sidecar-go/analysis/` | 接口级分析、瓶颈证据、回归检测、原因说明，以及 SQL 查询目录 |
+| `sidecar-go/analysis/fixtures/` | 确定性的合成性能夹具，无需真实负载测试即可验证分析功能 |
+| `sidecar-go/cmd/duckload/` | `duckload`——直接分析 `.duckdb` 结果文件的离线命令行工具 |
 | `k6/` | 基础及高级 k6 场景，以及 Kubernetes 部署清单 |
 | `aggregate-job/` | 合并分布式 DuckDB 结果文件的 Kubernetes Job |
 | `frontend/` | 基于 DuckDB-Wasm 和 Chart.js 的浏览器结果查看器 |
@@ -107,6 +113,32 @@ duckdb result.duckdb \
 docker compose stop
 ```
 
+## 分析（Analysis）
+
+除了运行级别的 `compare`/`run-stats`/`trend`/`baseline` 接口外，Sidecar 还能按接口分析一次测试并说明回归原因：
+
+- **接口分析**——每个接口的请求/错误数、延迟百分位数（p50/p90/p95/p99）、状态码分布，以及 DNS/TCP/TLS/TTFB/传输的平均耗时。
+- **瓶颈证据**——对比基线与当前测试时，找出每个接口耗时变化最大的阶段（DNS、TCP、TLS、TTFB 或传输）。这里只提供证据，不猜测根本原因。
+- **回归检测**——在接口级别生成可供程序判断的结果（`{metric, scope, baseline, current, change_percent, severity}`），使用与运行级对比相同的可配置阈值。
+- **原因说明（Explain）**——为每个发生回归的接口生成结构化、确定性的"性能证据摘要"：p95 变化、变化最大的耗时阶段、明显偏离同伴的 Pod，以及错误率变化。这些都是纯 SQL/Go 计算，不涉及大语言模型。
+
+每条分析 SQL 都保存在 `sidecar-go/analysis/queries/sql/` 中，作为带有说明（用途、所需列、参数、预期输出）的独立文档化产物，而不是嵌在 handler 代码里的字符串。轻量级验证器（`sidecar-go/analysis/validator/`）会检查每条查询所需的列、绑定参数、执行 `EXPLAIN`、运行查询并比对结果列——针对七种确定性的合成夹具（`sidecar-go/analysis/fixtures/`：healthy、latency-regression、error-spike、network-regression、backend-regression、pod-outlier、mixed-regression），从而无需真实负载测试即可在 CI 中发现损坏的分析查询。
+
+## CLI（`duckload`）
+
+`duckload` 可以直接分析 `.duckdb` 结果文件，无需运行 Sidecar——适合文件已下载或共享之后使用。
+
+```bash
+cd sidecar-go
+go build -o duckload ./cmd/duckload
+
+./duckload summary result.duckdb --run-id quickstart
+./duckload endpoints result.duckdb --run-id quickstart
+./duckload compare result.duckdb --baseline quickstart --current after-change
+./duckload diagnose result.duckdb --baseline quickstart --current after-change
+./duckload check-analysis   # 针对每个合成夹具验证所有分析查询
+```
+
 ## 浏览器结果查看器
 
 ```bash
@@ -115,7 +147,12 @@ npm install
 npm start
 ```
 
-打开 `http://localhost:8080` 并选择 DuckDB 结果文件。所有查询都在浏览器本地执行。
+打开 `http://localhost:8080` 并选择 DuckDB 结果文件。所有查询都在浏览器本地执行，无需服务端分析。提供四个视图：
+
+- **Summary**——一次测试的整体请求数、错误率和延迟百分位数，附状态码图表。
+- **Endpoints**——每个接口的请求/错误数和延迟百分位数。
+- **Regression**——基线与当前测试之间每个接口的 p95 与错误率差值。
+- **Timing Breakdown**——单个接口的 DNS/TCP/TLS/TTFB/传输平均耗时，基线与当前对比。
 
 ## Sidecar API
 
@@ -128,10 +165,12 @@ npm start
 | `POST` | `/api/v1/flush-upload` | 写入缓冲数据并上传数据库 |
 | `GET` | `/api/v1/download` | 下载当前数据库 |
 | `GET` | `/api/v1/stats` | 获取当前测试统计信息 |
-| `POST` | `/api/v1/analysis/compare` | 对比测试结果 |
+| `POST` | `/api/v1/analysis/compare` | 在整体层面对比两次测试并检测回归 |
 | `GET` | `/api/v1/analysis/run-stats` | 获取一次测试的统计信息 |
 | `GET` | `/api/v1/analysis/trend` | 获取指标趋势 |
-| `POST` | `/api/v1/analysis/baseline` | 计算基线 |
+| `POST` | `/api/v1/analysis/baseline` | 从多次测试计算基线 |
+| `GET` | `/api/v1/analysis/endpoints` | 获取一次测试的接口级统计信息 |
+| `POST` | `/api/v1/analysis/diagnose` | 获取接口级回归结果及结构化原因说明 |
 | `GET` | `/ws` | 通过 WebSocket 接收实时指标 |
 
 ## 配置
@@ -156,14 +195,16 @@ Sidecar 通过环境变量进行配置。
 
 ```bash
 make build-sidecar  # 构建 Go Sidecar
+make build-cli      # 构建 duckload 命令行工具
 make test-unit      # 使用 race detector 运行单元测试
 make test-e2e       # 运行端到端测试
+make test-analysis  # 针对每个合成夹具验证所有分析 SQL 查询
 make vet            # 运行 go vet
 make fmt            # 格式化 Go 源代码
 make fmt-check      # 检查格式但不修改文件
 ```
 
-CI 会检查格式、运行 `go vet`、构建程序、执行单元测试和端到端测试，并验证 Docker 镜像能够成功构建。
+CI 会检查格式、运行 `go vet`、构建程序、执行单元测试、分析 SQL 验证和端到端测试，并验证 Docker 镜像能够成功构建。
 
 ## 项目状态与贡献
 

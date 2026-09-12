@@ -1,23 +1,5 @@
 # DuckDB Load Testing Toolkit
 
-A portable load-testing pipeline that captures request-level [k6](https://grafana.com/docs/k6/latest/) metrics in [DuckDB](https://duckdb.org/), uploads results to S3-compatible storage, and analyzes them without running a permanent observability stack.
-
-> [!IMPORTANT]
-> This project is under active development. Interfaces and deployment manifests may change before the first stable release.
-
-## Why this project?
-
-Most load-testing dashboards keep pre-aggregated metrics. That is useful during a run, but it limits the questions you can ask afterward. This toolkit stores one row per request so that you can:
-
-- investigate a specific endpoint, status code, pod, or time window with SQL;
-- inspect DNS, TCP, TLS, TTFB, and total request timing;
-- combine results produced by multiple Kubernetes pods;
-- keep and share a test run as a single `.duckdb` file;
-- analyze results locally or in a browser with DuckDB-Wasm;
-- compare a run with a baseline and detect performance regressions.
-
-## How it works
-
 English | [日本語](README.ja.md) | [简体中文](README.zh-CN.md)
 
 [![CI](https://github.com/sibukixxx/duckdb-load-testing-toolkit/actions/workflows/ci.yml/badge.svg)](https://github.com/sibukixxx/duckdb-load-testing-toolkit/actions/workflows/ci.yml)
@@ -26,6 +8,9 @@ English | [日本語](README.ja.md) | [简体中文](README.zh-CN.md)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#project-status-and-contributing)
 
 A portable load-testing pipeline that captures request-level [k6](https://grafana.com/docs/k6/latest/) metrics in [DuckDB](https://duckdb.org/), uploads results to S3-compatible storage, and analyzes them without running a permanent observability stack.
+
+> [!IMPORTANT]
+> This project is under active development. Interfaces and deployment manifests may change before the first stable release.
 
 > [!NOTE]
 > The versioned Sidecar API under `/api/v1` and the `metrics` table schema are the
@@ -42,6 +27,8 @@ If you've ever wanted to re-slice a load test after the fact — by endpoint, by
 - [How it works](#how-it-works)
 - [Components](#components)
 - [Quick start](#quick-start)
+- [Analysis](#analysis)
+- [CLI (`duckload`)](#cli-duckload)
 - [Browser viewer](#browser-viewer)
 - [Sidecar API](#sidecar-api)
 - [Configuration](#configuration)
@@ -58,7 +45,10 @@ Most load-testing dashboards keep pre-aggregated metrics. That is useful during 
 - combine results produced by multiple Kubernetes pods;
 - keep and share a test run as a single `.duckdb` file;
 - analyze results locally or in a browser with DuckDB-Wasm;
-- compare a run with a baseline and detect performance regressions.
+- compare a run with a baseline and detect performance regressions;
+- get a structured, deterministic explanation of *why* a run regressed — which endpoint, which timing phase, which pods.
+
+**Portable performance analysis from request-level load-test data.** No permanent observability stack required: run, save, share, query, compare, diagnose.
 
 ## How it works
 
@@ -84,6 +74,9 @@ The k6 script sends request metrics to the Go sidecar. The sidecar buffers them,
 | Path | Purpose |
 | --- | --- |
 | `sidecar-go/` | HTTP ingestion API, DuckDB storage, S3 upload, analysis, and live WebSocket updates |
+| `sidecar-go/analysis/` | Endpoint analysis, bottleneck evidence, regression detection, explain, and the SQL query catalog |
+| `sidecar-go/analysis/fixtures/` | Deterministic synthetic performance fixtures used to test analysis without a real load test |
+| `sidecar-go/cmd/duckload/` | `duckload` — an offline CLI for analyzing a `.duckdb` result file directly |
 | `k6/` | Basic and advanced k6 scenarios plus Kubernetes manifests |
 | `aggregate-job/` | Kubernetes job for merging distributed DuckDB result files |
 | `frontend/` | Browser-based DuckDB-Wasm and Chart.js result viewer |
@@ -139,10 +132,56 @@ duckdb result.duckdb \
   "SELECT status, count(*) AS requests, avg(rtt) AS avg_rtt FROM metrics GROUP BY status"
 ```
 
+### 4. Analyze and compare
+
+Run the quickstart test again with a different `RUN_ID` (e.g. `after-change`), download that result too, then compare the two runs — either through the API or offline with the `duckload` CLI:
+
+```bash
+curl -X POST http://localhost:8081/api/v1/analysis/compare \
+  -H 'Content-Type: application/json' \
+  -d '{"baseline_run_id": "quickstart", "current_run_id": "after-change"}'
+```
+
+### 5. Diagnose a regression
+
+If a comparison shows a regression, ask *why*: which endpoint, which timing phase (DNS/TCP/TLS/TTFB/transfer), and which pods were affected.
+
+```bash
+curl -X POST http://localhost:8081/api/v1/analysis/diagnose \
+  -H 'Content-Type: application/json' \
+  -d '{"baseline_run_id": "quickstart", "current_run_id": "after-change"}'
+```
+
 To stop the local stack while keeping its volumes:
 
 ```bash
 docker compose stop
+```
+
+## Analysis
+
+Beyond the run-level `compare`/`run-stats`/`trend`/`baseline` endpoints, the sidecar can analyze a run per endpoint and explain a regression:
+
+- **Endpoint analysis** — request/error counts, latency percentiles (p50/p90/p95/p99), status code distribution, and average DNS/TCP/TLS/TTFB/transfer timing per endpoint.
+- **Bottleneck evidence** — for a baseline/current pair, which timing phase (DNS, TCP, TLS, TTFB, or transfer) changed the most for each endpoint. This stops at evidence; it does not guess a root cause.
+- **Regression detection** — machine-checkable findings (`{metric, scope, baseline, current, change_percent, severity}`) at the endpoint level, using the same configurable thresholds as the run-level comparator.
+- **Explain** — a structured, deterministic "performance evidence summary" per regressed endpoint: the p95 change, the largest timing change, the pods that stood out from their peers, and the error rate delta. This is plain SQL/Go arithmetic, not an LLM.
+
+Every analysis SQL query lives in `sidecar-go/analysis/queries/sql/` as a documented, named artifact (purpose, required columns, parameters, expected output) rather than a string embedded in a handler. A lightweight validator (`sidecar-go/analysis/validator/`) checks each query's required columns, binds its parameters, runs `EXPLAIN`, executes it, and compares its result columns against what it declares — against seven deterministic synthetic fixtures (`sidecar-go/analysis/fixtures/`: healthy, latency-regression, error-spike, network-regression, backend-regression, pod-outlier, mixed-regression) so a broken analysis query is caught in CI without running a real load test.
+
+## CLI (`duckload`)
+
+`duckload` analyzes a `.duckdb` result file directly, without a running sidecar — useful once a file has been downloaded or shared.
+
+```bash
+cd sidecar-go
+go build -o duckload ./cmd/duckload
+
+./duckload summary result.duckdb --run-id quickstart
+./duckload endpoints result.duckdb --run-id quickstart
+./duckload compare result.duckdb --baseline quickstart --current after-change
+./duckload diagnose result.duckdb --baseline quickstart --current after-change
+./duckload check-analysis   # validates every catalog query against every synthetic fixture
 ```
 
 ## Browser viewer
@@ -153,7 +192,12 @@ npm install
 npm start
 ```
 
-Open `http://localhost:8080` and select a DuckDB result file. Queries run locally in the browser with DuckDB-Wasm.
+Open `http://localhost:8080` and select a DuckDB result file. Queries run locally in the browser with DuckDB-Wasm — no server-side analysis is required. Four views are available:
+
+- **Summary** — overall request count, error rate, and latency percentiles for a run, with a status-code chart.
+- **Endpoints** — per-endpoint request/error counts and latency percentiles.
+- **Regression** — per-endpoint p95 and error-rate deltas between a baseline and a current run.
+- **Timing Breakdown** — DNS/TCP/TLS/TTFB/transfer averages for one endpoint, baseline vs. current.
 
 ## Sidecar API
 
@@ -166,10 +210,12 @@ Open `http://localhost:8080` and select a DuckDB result file. Queries run locall
 | `POST` | `/api/v1/flush-upload` | Flush and upload the database |
 | `GET` | `/api/v1/download` | Download the current database |
 | `GET` | `/api/v1/stats` | Read current run statistics |
-| `POST` | `/api/v1/analysis/compare` | Compare runs |
+| `POST` | `/api/v1/analysis/compare` | Compare two runs at the overall level and detect regressions |
 | `GET` | `/api/v1/analysis/run-stats` | Read statistics for a run |
 | `GET` | `/api/v1/analysis/trend` | Read a metric trend |
-| `POST` | `/api/v1/analysis/baseline` | Calculate a baseline |
+| `POST` | `/api/v1/analysis/baseline` | Calculate a baseline from multiple runs |
+| `GET` | `/api/v1/analysis/endpoints` | Per-endpoint statistics for a run |
+| `POST` | `/api/v1/analysis/diagnose` | Per-endpoint regression findings plus a structured explanation |
 | `GET` | `/ws` | Stream live metrics over WebSocket |
 
 ## Configuration
@@ -194,14 +240,16 @@ See [`docker-compose.yml`](docker-compose.yml) for a complete local example and 
 
 ```bash
 make build-sidecar  # build the Go sidecar
+make build-cli      # build the duckload CLI
 make test-unit      # run unit tests with the race detector
 make test-e2e       # run end-to-end tests
+make test-analysis  # validate every analysis SQL query against every synthetic fixture
 make vet            # run go vet
 make fmt            # format Go source files
 make fmt-check      # verify formatting without changing files
 ```
 
-CI runs formatting, vet, build, unit tests, end-to-end tests, and a Docker image build.
+CI runs formatting, vet, build, unit tests, analysis SQL validation, end-to-end tests, and a Docker image build.
 
 ## Project status and contributing
 
