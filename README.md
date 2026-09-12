@@ -225,16 +225,19 @@ See [`docs/performance-gate.md`](docs/performance-gate.md) for the full contract
 cd sidecar-go
 go build -o duckload ./cmd/duckload
 
+# summary/endpoints/compare/diagnose take a single .duckdb FILE as their
+# positional argument, and --baseline/--current as RUN_ID values within it.
 ./duckload summary result.duckdb --run-id quickstart
 ./duckload endpoints result.duckdb --run-id quickstart
 ./duckload compare result.duckdb --baseline quickstart --current after-change
 ./duckload diagnose result.duckdb --baseline quickstart --current after-change
 ./duckload check-analysis   # validates every catalog query against every synthetic fixture
 
-# Performance gate — see the Performance Gate section above.
-# --baseline/--current each accept either a separate .duckdb file (its
-# run_id is auto-detected if the file has exactly one) or, combined with
-# --baseline-run-id/--run-id, a run_id within the same file.
+# gate is the one exception: --baseline/--current are FILE paths (there is
+# no positional argument), each auto-detecting its run_id if the file has
+# exactly one — see the Performance Gate section above. Add --run-id /
+# --baseline-run-id to pick a run_id explicitly, including from a single
+# file shared between both (as below, reusing result.duckdb for both).
 ./duckload gate --current current.duckdb --baseline baseline.duckdb --policy performance-policy.yml
 ./duckload gate --current result.duckdb --run-id after-change --baseline result.duckdb --baseline-run-id quickstart --policy performance-policy.yml --format json
 ```

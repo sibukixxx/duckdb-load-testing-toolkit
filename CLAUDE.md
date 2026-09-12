@@ -13,19 +13,28 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **ポータブル**: `.duckdb`ファイル1つで結果を共有・分析可能
 - **軽量**: InfluxDB/Grafanaなどの重厚なスタック不要
 - **ブラウザ分析**: duckdb-wasmでサーバーなしでも分析可能
-- **回帰検知**: ベースラインとの自動比較機能
+- **エンドポイント分析・回帰検知・Explain**: baselineとの自動比較、ボトルネックの根拠、決定論的な原因説明
+- **Performance Gate**: YAML/JSONポリシーで設定するPASS/WARN/FAIL判定。CI provider非依存
 
 ## Build Commands
 
 ### Go Sidecar
 ```bash
 make build-sidecar              # Build sidecar binary
+make build-cli                  # Build the duckload CLI (offline analysis, gate)
 cd sidecar-go && go build -o duckdb-sidecar  # Direct build
 
 # Run tests
 cd sidecar-go && go test ./...                   # All tests
 cd sidecar-go && go test ./storage/...           # Single package
 cd sidecar-go && go test -v -run TestDuckDBStorage_Flush ./storage/...  # Single test
+
+make test-unit                  # Race-detector unit tests (analysis, cmd, handlers, models, orchestrator, realtime, storage)
+make test-e2e                   # End-to-end tests (test/e2e/tests)
+make test-analysis              # Validate every analysis SQL query against every synthetic fixture
+make test-gate                  # Policy schema + gate evaluation engine, against every synthetic gate fixture
+make bench-gate                 # Synthetic cost check for the gate at 100k/1M requests (not part of `make test`)
+make ci                         # fmt-check + vet + test-unit (fast local gate)
 ```
 
 ### Docker Compose (RustFS + Sidecar)
@@ -42,9 +51,9 @@ IMAGE_NAME=yourrepo/duckdb-sidecar:latest ./scripts/build_and_push_sidecar.sh
 
 ### Frontend
 ```bash
-cd frontend && pnpm install
-pnpm start                      # Dev server on :8080
-pnpm build                      # Production build (parcel)
+cd frontend && npm install
+npm start                       # Dev server on :8080
+npm run build                   # Production build (parcel)
 ```
 
 ## Architecture
@@ -97,33 +106,33 @@ This is a load testing pipeline template using k6 + Kubernetes + DuckDB + RustFS
 **sidecar-go/**: Go service (requires Go 1.24+) with modular structure:
 - `main.go`: HTTP server entry point using gorilla/mux
 - `models/`: Event data model with detailed timing fields
-- `storage/`: DuckDB storage (duckdb-go/v2) and S3-compatible uploader (AWS SDK v2)
-- `handlers/`: HTTP handlers for ingest, flush, download, and analysis endpoints
-- `analysis/`: Baseline comparison and regression detection logic
+- `storage/`: DuckDB storage (duckdb-go/v2) and S3-compatible uploader (AWS SDK v2). Exports `MetricsTableSchema`, the canonical DDL, so fixtures/tests never duplicate it.
+- `handlers/`: HTTP handlers for ingest, flush, download, and analysis endpoints (`analysis_handlers.go`)
+- `analysis/`: Endpoint analysis, bottleneck evidence, baseline comparison, regression detection, and Explain (deterministic, no LLM)
+  - `queries/`: The analysis SQL catalog — each query is a `.sql` file under `sql/` with a metadata header (id, purpose, required columns, parameters, expected output), not a string embedded in Go
+  - `validator/`: Validates a catalog query via DuckDB itself (schema introspection, `EXPLAIN`, execution) rather than a custom SQL linter
+  - `fixtures/`: Deterministic synthetic performance fixtures (see `fixtures.go` and `gate_fixtures.go`) so analysis/gate logic is tested without a real load test
+  - `gate/`: The performance gate's evaluation engine (`Evaluate(current, baseline, policy) *Result` — pure function, no I/O, no CI-provider awareness)
+  - `policy/`: The performance policy schema (YAML/JSON) and loader
+- `cmd/duckload/`: The `duckload` CLI — offline analysis of a `.duckdb` file (`summary`, `endpoints`, `compare`, `diagnose`, `check-analysis`, `gate`)
 - `orchestrator/`: Distributed pod orchestration controller
 - `realtime/`: WebSocket hub for live metrics streaming
 
 **k6/**: Load test scripts
 - `k6-script.js`: Basic script posting events to sidecar
-- `scenarios/`: Advanced scenarios (auth-flow, multi-endpoint, data-driven)
+- `scenarios/`: Advanced scenarios (auth-flow, multi-endpoint, data-driven) — each request is tagged with a `name` (e.g. `login`, `get_profile`); the analysis layer groups by `COALESCE(NULLIF(name, ''), url)` so query/path parameters in `url` never explode endpoint cardinality
 
 **aggregate-job/**: Python script using boto3. Downloads per-pod `.duckdb` files from S3-compatible storage, attaches each, and merges into `metrics_all` table.
 
-**frontend/**: duckdb-wasm + Chart.js. Loads local `.duckdb` file and runs analytics queries in browser.
+**frontend/**: duckdb-wasm + Chart.js. Loads a local `.duckdb` file and runs Summary/Endpoints/Regression/Timing Breakdown/Gate views entirely in the browser — no server-side analysis required.
 
 **docker-compose.yml**: Local development setup with RustFS and Sidecar.
 
+**docs/**: `performance-gate.md`, `performance-policy.md`, `ci-integration.md`, plus a ready-to-copy example policy and GitHub Actions workflow under `docs/examples/`.
+
 ### DuckDB Table Schema
-```sql
-CREATE TABLE metrics (
-    ts BIGINT,
-    pod_id VARCHAR,
-    url VARCHAR,
-    status INTEGER,
-    rtt DOUBLE,
-    body_len INTEGER
-);
-```
+
+The actual schema (`storage.MetricsTableSchema` in `sidecar-go/storage/duckdb.go`) is considerably wider than a minimal example — it carries per-request identification (`run_id`, `pod_id`, `vu`, `iter`), request info (`method`, `url`, `name`), response info (`status`, `body_len`), detailed timings (`rtt`, `dns_lookup`, `tcp_connect`, `tls_handshake`, `ttfb`, `content_transfer`), size metrics, error fields, and a `tags` JSON column. Read that constant directly rather than relying on a copy here — it is the compatibility boundary (see the note in each README) and this file is not kept in sync with it automatically.
 
 ### Environment Variables
 
@@ -171,4 +180,10 @@ curl http://localhost:8081/api/v1/download -o result.duckdb
 
 # Query with DuckDB CLI
 duckdb result.duckdb "SELECT status, COUNT(*), AVG(rtt) FROM metrics GROUP BY status"
+
+# Offline analysis with duckload (build once with `make build-cli`)
+sidecar-go/duckload endpoints result.duckdb --run-id test-run
+sidecar-go/duckload gate --current result.duckdb --run-id test-run --policy docs/examples/performance-policy.example.yml
 ```
+
+See `docs/performance-gate.md`, `docs/performance-policy.md`, and `docs/ci-integration.md` for the performance gate's PASS/WARN/FAIL contract, its policy schema, and wiring it into CI.

@@ -879,16 +879,18 @@ FAIL    /api/users               p95 (regression)
 cd sidecar-go
 go build -o duckload ./cmd/duckload
 
+# summary/endpoints/compare/diagnoseは位置引数に.duckdbファイルを1つ取り、
+# --baseline/--currentはそのファイル内のRUN_IDを指す。
 ./duckload summary result.duckdb --run-id test-run
 ./duckload endpoints result.duckdb --run-id test-run
 ./duckload compare result.duckdb --baseline baseline-v1.0 --current after-optimization
 ./duckload diagnose result.duckdb --baseline baseline-v1.0 --current after-optimization
 ./duckload check-analysis   # 全ての合成フィクスチャに対してカタログ内の全分析SQLを検証する
 
-# Performance Gate — 詳細は上記「Performance Gate」節を参照。
-# --baseline/--current にはそれぞれ独立した .duckdb ファイル（run_idが1つ
-# しかなければ自動検出）、または --baseline-run-id/--run-id と組み合わせて
-# 同一ファイル内のrun_idのいずれも指定できる。
+# gateだけは例外: --baseline/--currentはファイルパスを指す（位置引数はない）。
+# run_idが1つしかないファイルは自動検出される。詳細は上記「Performance Gate」
+# 節を参照。--run-id/--baseline-run-idを付けるとrun_idを明示的に指定でき、
+# 下記のように同じファイルを両方に使い回すこともできる。
 ./duckload gate --current current.duckdb --baseline baseline.duckdb --policy performance-policy.yml
 ./duckload gate --current result.duckdb --run-id after-optimization --baseline result.duckdb --baseline-run-id baseline-v1.0 --policy performance-policy.yml --format json
 ```
@@ -1134,4 +1136,4 @@ WHERE json_extract_string(tags, '$.user_type') = 'premium';
 
 ## ライセンス
 
-MIT License
+[MIT License](LICENSE) の下で配布されています。
