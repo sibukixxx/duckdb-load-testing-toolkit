@@ -21,6 +21,38 @@ A portable load-testing pipeline that captures request-level [k6](https://grafan
 
 If you've ever wanted to re-slice a load test after the fact — by endpoint, by pod, by percentile, by anything — instead of being stuck with whatever your dashboard pre-aggregated, this toolkit is for you. A ⭐ on the repo helps other people running k6 tests find it.
 
+
+<!-- role-boundary:v1 -->
+## Role and boundaries
+
+**Role:** load-test request metricsを保存・比較・診断し、再現可能なperformance evidenceを生成する **performance evidence producer**。
+
+### Owns
+
+- request-level load-test capture and portable storage
+- deterministic aggregation/comparison/regression diagnosis
+- performance policy/gate
+- machine-readable performance artifacts
+
+### Does not own
+
+- business recommendation or project prioritization
+- generic research/hypothesis semantics
+- customer-specific consulting workflow
+- application deployment authority
+- permanent observability platform responsibilities
+
+### Integration
+
+```text
+k6 / request metrics
+        ↓
+DuckDB Load Testing Toolkit
+        ↓ performance evidence / gate result
+CI / human / research / downstream decision system
+```
+
+Performance factsとdownstream interpretationを分離する。同じ入力とpolicyから再現可能なartifactを出すことを優先する。
 ## Table of Contents
 
 - [Why this project?](#why-this-project)
